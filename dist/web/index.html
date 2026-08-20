@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#07090e">
+  <title>PocketPad - Forza Racing Wheel & Gamepad</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&family=JetBrains+Mono:wght@500;700;800&family=Racing+Sans+One&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="gamepad-container">
+    <!-- HTTPS Warning Banner (Shown only if opened over plain HTTP without localhost) -->
+    <div id="https-warning-banner" class="https-warning-banner" style="display: none;">
+      <span>⚠️ Motion sensors require HTTPS.</span>
+      <a id="https-switch-link" href="#" class="switch-https-btn">Switch to HTTPS (Port 8443) ➔</a>
+    </div>
+
+    <!-- Top Bar: Mode Switcher, Status, Settings -->
+    <header class="top-bar">
+      <div class="brand">
+        <span class="logo-icon">🏎️</span>
+        <span class="brand-name">PocketPad <span class="badge-edition">FORZA</span></span>
+      </div>
+
+      <!-- Mode Switcher -->
+      <div class="mode-tabs">
+        <button id="tab-racing" class="mode-tab active">🏎️ Motion Wheel</button>
+        <button id="tab-standard" class="mode-tab">🎮 Standard</button>
+      </div>
+
+      <div class="status-panel">
+        <span id="conn-badge" class="status-badge disconnected">Disconnected</span>
+        <span id="ping-badge" class="ping-badge">-- ms</span>
+        <button id="btn-settings" class="icon-btn" title="Racing Settings">⚙️</button>
+        <button id="btn-fullscreen" class="icon-btn" title="Toggle Fullscreen">⛶</button>
+      </div>
+    </header>
+
+    <!-- ==================== RACING WHEEL MODE ==================== -->
+    <div id="mode-racing-view" class="view-mode active">
+      <!-- Top Quick Actions -->
+      <div class="racing-top-row">
+        <div class="top-left-actions">
+          <button class="racing-aux-btn btn-rewind" data-btn="Y" title="Rewind (Y)">
+            <span class="aux-icon">⏪</span> REWIND (Y)
+          </button>
+          <button class="racing-aux-btn btn-lookback" data-btn="RS" title="Look Behind (RS)">
+            <span class="aux-icon">🔄</span> MIRROR
+          </button>
+        </div>
+
+        <div class="center-racing-hud">
+          <!-- GT3 / F1 Dynamic LED Shift Light Bar -->
+          <div class="rpm-lights" id="shift-light-bar">
+            <span class="rpm-dot" data-led="0"></span>
+            <span class="rpm-dot" data-led="1"></span>
+            <span class="rpm-dot" data-led="2"></span>
+            <span class="rpm-dot" data-led="3"></span>
+            <span class="rpm-dot" data-led="4"></span>
+            <span class="rpm-dot" data-led="5"></span>
+            <span class="rpm-dot" data-led="6"></span>
+            <span class="rpm-dot" data-led="7"></span>
+            <span class="rpm-dot" data-led="8"></span>
+            <span class="rpm-dot" data-led="9"></span>
+          </div>
+
+          <!-- Live Telemetry Telemetry Speed & RPM Bar -->
+          <div class="telemetry-dashboard-bar">
+            <div class="telem-item speed-block">
+              <span id="telem-speed" class="telem-val">0</span>
+              <span id="telem-speed-unit" class="telem-unit">MPH</span>
+            </div>
+            <div class="telem-item rpm-block">
+              <span id="telem-rpm" class="telem-val">0</span>
+              <span class="telem-unit">RPM</span>
+            </div>
+            <div class="telem-item boost-block">
+              <span id="telem-boost" class="telem-val">0.0</span>
+              <span class="telem-unit">PSI</span>
+            </div>
+            <div class="telem-item slip-block" id="telem-slip-block">
+              <span id="telem-slip" class="telem-val">GRIP</span>
+            </div>
+          </div>
+
+          <div class="steering-readout">
+            <div class="direction-bar">
+              <span id="ind-left" class="dir-tag">◀ LEFT</span>
+              <span id="steering-angle-text" class="angle-display">0.0°</span>
+              <span id="ind-right" class="dir-tag">RIGHT ▶</span>
+            </div>
+            <span class="steering-sub">STEERING ANGLE</span>
+          </div>
+        </div>
+
+        <div class="top-right-actions">
+          <button class="racing-aux-btn btn-camera" data-btn="BACK" title="Change Camera (View)">
+            <span class="aux-icon">🎥</span> CAMERA
+          </button>
+          <button id="btn-telemetry-demo" class="racing-aux-btn btn-telemetry" title="Toggle Forza Telemetry Demo Simulation">
+            <span class="aux-icon">🏁</span> DASH DEMO
+          </button>
+          <button class="racing-aux-btn btn-horn" data-btn="LS" title="Horn / Action">
+            <span class="aux-icon">📢</span> HORN
+          </button>
+        </div>
+      </div>
+
+      <!-- Main Racing Cockpit -->
+      <div class="racing-cockpit">
+        <!-- LEFT SIDE: Brake Pedal, Downshift, Clutch -->
+        <section class="pedal-cluster left-cluster">
+          <div class="shifter-paddle-wrap">
+            <button class="paddle-btn shift-down" data-btn="X" aria-label="Shift Down (X)">
+              <span class="paddle-label">▼ DOWN</span>
+              <span class="paddle-key">(X)</span>
+            </button>
+            <button class="clutch-btn" data-btn="LB" aria-label="Clutch (LB)">
+              CLUTCH (LB)
+            </button>
+          </div>
+
+          <div class="pedal-wrap brake-wrap" id="brake-pedal-zone">
+            <div class="pedal-meter-bg">
+              <div class="pedal-meter-fill brake-fill" id="brake-meter-fill"></div>
+            </div>
+            <div class="pedal-plate brake-plate">
+              <span class="pedal-icon">🛑</span>
+              <span class="pedal-title">BRAKE</span>
+              <span class="pedal-pct" id="brake-pct">0%</span>
+              <span class="pedal-hint">SLIDE / TAP (LT)</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- CENTER: Animated Wheel & Gyro Controls -->
+        <section class="wheel-center-cluster">
+          <div class="wheel-container" id="wheel-container" title="Tilt phone to steer (or drag wheel)">
+            <div class="wheel-ring" id="wheel-graphic">
+              <div class="wheel-spoke spoke-left"></div>
+              <div class="wheel-spoke spoke-right"></div>
+              <div class="wheel-spoke spoke-bottom"></div>
+              <div class="wheel-center-badge">
+                <span class="gear-sub-label">GEAR</span>
+                <span id="telemetry-gear" class="gear-display-num">N</span>
+              </div>
+              <div class="wheel-top-marker"></div>
+            </div>
+          </div>
+
+          <!-- Motion Calibration & Enable -->
+          <div class="motion-controls-row">
+            <button id="btn-enable-motion" class="motion-enable-btn">
+              <span class="motion-icon">📱</span> Motion: OFF
+            </button>
+            <button id="btn-calibrate-motion" class="motion-calib-btn" title="Set current phone position as straight ahead">
+              🎯 Center Wheel (Zero)
+            </button>
+          </div>
+
+          <!-- Micro-Trim, Invert, & Quick Angle Selector Row -->
+          <div class="trim-controls-row">
+            <button id="btn-trim-left" class="trim-btn" title="Trim Left 0.5°">◀ Trim L</button>
+            <button id="btn-quick-angle" class="trim-btn angle-btn" title="Cycle Max Angle: 25° -> 45° -> 65° -> 90°">📐 45° Lock</button>
+            <button id="btn-invert-steer" class="trim-btn invert-btn" title="Invert Steering Direction">🔄 Invert: OFF</button>
+            <button id="btn-trim-right" class="trim-btn" title="Trim Right 0.5°">Trim R ▶</button>
+          </div>
+        </section>
+
+        <!-- RIGHT SIDE: Throttle Pedal, Upshift, Handbrake / Drift -->
+        <section class="pedal-cluster right-cluster">
+          <div class="pedal-wrap throttle-wrap" id="throttle-pedal-zone">
+            <div class="pedal-meter-bg">
+              <div class="pedal-meter-fill throttle-fill" id="throttle-meter-fill"></div>
+            </div>
+            <div class="pedal-plate throttle-plate">
+              <span class="pedal-icon">⚡</span>
+              <span class="pedal-title">THROTTLE</span>
+              <span class="pedal-pct" id="throttle-pct">0%</span>
+              <span class="pedal-hint">SLIDE / TAP (RT)</span>
+            </div>
+          </div>
+
+          <div class="shifter-paddle-wrap">
+            <button class="paddle-btn shift-up" data-btn="B" aria-label="Shift Up (B)">
+              <span class="paddle-label">▲ UP</span>
+              <span class="paddle-key">(B)</span>
+            </button>
+            <button class="handbrake-btn" data-btn="A" aria-label="Handbrake / Drift (A)">
+              <span class="hb-icon">💨</span>
+              <span class="hb-label">E-BRAKE</span>
+              <span class="hb-sub">(A - DRIFT)</span>
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <!-- Settings Modal -->
+      <div id="settings-modal" class="settings-modal">
+        <div class="settings-card">
+          <div class="settings-header">
+            <h3>⚙️ Forza Precision Steering</h3>
+            <button id="btn-close-settings" class="close-btn">✕</button>
+          </div>
+          <div class="settings-body">
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="slider-sensitivity">Physical Tilt for 100% Full Lock: <span id="val-sensitivity" class="highlight-val">90°</span></label>
+              </div>
+              <input type="range" id="slider-sensitivity" min="15" max="90" value="90" step="5">
+              <div class="preset-pill-group">
+                <button type="button" class="preset-pill active" data-angle="90">🎯 90° (Natural 1:1 Precision)</button>
+                <button type="button" class="preset-pill" data-angle="60">🏎️ 60° (Sport Response)</button>
+                <button type="button" class="preset-pill" data-angle="45">🏁 45° (Quick Action)</button>
+                <button type="button" class="preset-pill" data-angle="30">⚡ 30° (Fast Drift)</button>
+              </div>
+              <span class="setting-desc">Sets exact physical wrist tilt angle needed to reach 100% full steering lock in-game. 90° gives maximum millimeter precision across the entire wrist motion!</span>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="slider-steering-sens">Steering Sensitivity (Angle Multiplier): <span id="val-steering-sens" class="highlight-val">2.89x (260° @ 90° Tilt)</span></label>
+              </div>
+              <input type="range" id="slider-steering-sens" min="50" max="500" value="289" step="5">
+              <div class="preset-pill-group">
+                <button type="button" class="preset-pill sens-pill active" data-sens="289">⚡ 2.89x (260° @ 90° Tilt)</button>
+                <button type="button" class="preset-pill sens-pill" data-sens="100">🎯 1.00x (Natural 1:1)</button>
+                <button type="button" class="preset-pill sens-pill" data-sens="150">🏎️ 1.50x (Sport 135°)</button>
+                <button type="button" class="preset-pill sens-pill" data-sens="200">🏁 2.00x (Hyper 180°)</button>
+                <button type="button" class="preset-pill sens-pill" data-sens="400">🔥 4.00x (Extreme Drift)</button>
+              </div>
+              <span class="setting-desc">Increases steering angle per tilt. <strong>2.89x = 90° physical tilt turns wheel 260°</strong> for effortless, ultra-responsive cornering!</span>
+            </div>
+
+            <div class="setting-item" style="border-left: 3px solid var(--forza-cyan); background: rgba(0, 240, 255, 0.05); padding: 10px; border-radius: 6px; margin-bottom: 12px;">
+              <label style="color: var(--forza-cyan); font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                <span>🔥</span> Forza In-Game Deadzone Fix (Crucial)
+              </label>
+              <div style="font-size: 11px; color: #ccc; line-height: 1.4;">
+                In Forza Horizon: <strong>Settings ➔ Advanced Controls</strong><br>
+                • Set <strong>Steering Inside Deadzone = 0</strong> <em>(Removes Forza's 24% built-in lag)</em><br>
+                • Set <strong>Steering Outside Deadzone = 100</strong> | <strong>Linearity = 50</strong>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="slider-anti-deadzone">Anti-Deadzone (Game Deadband Bypass): <span id="val-anti-deadzone" class="highlight-val">20% (Forza Bypass Active)</span></label>
+              </div>
+              <input type="range" id="slider-anti-deadzone" min="0" max="35" value="20" step="1">
+              <div class="preset-pill-group">
+                <button type="button" class="preset-pill antidead-pill active" data-antidead="20">⚡ 20% (Forza Horizon Bypass)</button>
+                <button type="button" class="preset-pill antidead-pill" data-antidead="25">🔥 25% (Extreme Bypass)</button>
+                <button type="button" class="preset-pill antidead-pill" data-antidead="12">🏎️ 12% (GT / F1)</button>
+                <button type="button" class="preset-pill antidead-pill" data-antidead="0">🎯 0% (Pure Linear)</button>
+              </div>
+              <span class="setting-desc">Punches straight through the game's built-in 15–24% controller deadband. Car turns <strong>instantly on the first 0.5° of phone tilt</strong>!</span>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="slider-curve">Steering Linearity (S-Curve): <span id="val-curve" class="highlight-val">1.0x (Linear)</span></label>
+              </div>
+              <input type="range" id="slider-curve" min="10" max="22" value="10" step="1">
+              <span class="setting-desc">Higher curve = Ultra-stable micro-adjustments on straights + responsive full lock in hairpins.</span>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-label-row">
+                <label for="slider-deadzone">Phone Sensor Tremor Guard: <span id="val-deadzone" class="highlight-val">0% (Pure 1:1 Raw)</span></label>
+              </div>
+              <input type="range" id="slider-deadzone" min="0" max="15" value="0" step="1">
+              <span class="setting-desc">0% gives raw unadulterated response down to 0.01° micro-movements.</span>
+            </div>
+
+            <div class="setting-item">
+              <label>Speedometer Unit:</label>
+              <div class="radio-group">
+                <label><input type="radio" name="speed-unit" value="MPH" checked> MPH (Imperial)</label>
+                <label><input type="radio" name="speed-unit" value="KMH"> KM/H (Metric)</label>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <label>Pedal Control Mode:</label>
+              <div class="radio-group">
+                <label><input type="radio" name="pedal-mode" value="analog" checked> Analog Slide (Feathering)</label>
+                <label><input type="radio" name="pedal-mode" value="digital"> Tap = 100%</label>
+              </div>
+            </div>
+
+            <div class="setting-item telemetry-setup-box">
+              <label>🏎️ How to Enable Forza Telemetry in Game:</label>
+              <div class="setup-steps">
+                <div>1. In Forza Horizon: Go to <strong>Settings ➔ HUD and Gameplay</strong></div>
+                <div>2. Scroll to bottom: Set <strong>Data Out = ON</strong></div>
+                <div>3. Set <strong>Data Out IP Address = 127.0.0.1</strong></div>
+                <div>4. Set <strong>Data Out IP Port = 5300</strong></div>
+              </div>
+            </div>
+
+            <div class="setting-item debug-item">
+              <label>Sensor Live Diagnostic:</label>
+              <div id="sensor-debug-text" class="sensor-debug-text">Sensor: Idle / Tap Enable Motion</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== STANDARD GAMEPAD MODE ==================== -->
+    <div id="mode-standard-view" class="view-mode">
+      <div class="shoulder-row">
+        <div class="shoulder-group left-shoulders">
+          <button id="btn-lt" class="trigger-btn" data-trigger="LT">LT</button>
+          <button id="btn-lb" class="bumper-btn" data-btn="LB">LB</button>
+        </div>
+        <div class="center-controls">
+          <button class="sys-btn" data-btn="BACK">SELECT</button>
+          <button class="sys-btn guide-btn" data-btn="GUIDE">X</button>
+          <button class="sys-btn" data-btn="START">START</button>
+        </div>
+        <div class="shoulder-group right-shoulders">
+          <button id="btn-rb" class="bumper-btn" data-btn="RB">RB</button>
+          <button id="btn-rt" class="trigger-btn" data-trigger="RT">RT</button>
+        </div>
+      </div>
+
+      <main class="controller-body">
+        <section class="control-quadrant left-quadrant">
+          <div class="stick-wrapper">
+            <div id="stick-left" class="analog-stick-zone" data-stick="LEFT">
+              <div class="stick-base">
+                <div class="stick-thumb" id="stick-left-thumb">
+                  <span class="stick-label">LS</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dpad-wrapper">
+            <div class="dpad-cluster">
+              <button class="dpad-btn dpad-up" data-btn="DPAD_UP">▲</button>
+              <button class="dpad-btn dpad-left" data-btn="DPAD_LEFT">◀</button>
+              <div class="dpad-center"></div>
+              <button class="dpad-btn dpad-right" data-btn="DPAD_RIGHT">▶</button>
+              <button class="dpad-btn dpad-down" data-btn="DPAD_DOWN">▼</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="control-quadrant right-quadrant">
+          <div class="abxy-wrapper">
+            <div class="abxy-cluster">
+              <button class="action-btn btn-y" data-btn="Y">Y</button>
+              <button class="action-btn btn-x" data-btn="X">X</button>
+              <button class="action-btn btn-b" data-btn="B">B</button>
+              <button class="action-btn btn-a" data-btn="A">A</button>
+            </div>
+          </div>
+
+          <div class="stick-wrapper">
+            <div id="stick-right" class="analog-stick-zone" data-stick="RIGHT">
+              <div class="stick-base">
+                <div class="stick-thumb" id="stick-right-thumb">
+                  <span class="stick-label">RS</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- Orientation Alert for Portrait Mode -->
+    <div id="orientation-overlay" class="orientation-overlay">
+      <div class="orientation-box">
+        <div class="rotate-icon">🏎️ ↷ 🔄</div>
+        <h2>Rotate Your Phone</h2>
+        <p>Please rotate your phone to <strong>Landscape Mode</strong> for the Forza Racing Cockpit experience.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="gamepad.js"></script>
+</body>
+</html>

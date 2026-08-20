@@ -1,0 +1,18 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*.class
+*.log
+
+# PyInstaller Temporary Build Cache
+build/
+
+# Local Auto-Generated SSL Certificates
+cert.pem
+key.pem
+
+# OS & Environment
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

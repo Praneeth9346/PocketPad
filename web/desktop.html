@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PocketPad - Forza Racing Control Center</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800;900&family=JetBrains+Mono:wght@500;700;800&family=Racing+Sans+One&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="desktop.css">
+</head>
+<body>
+  <div class="desktop-app-wrapper">
+    <!-- Top Header & Navigation -->
+    <header class="app-header">
+      <div class="brand-group">
+        <div class="brand-badge">FH</div>
+        <div class="brand-text">
+          <h1 class="brand-title">POCKETPAD</h1>
+          <span class="brand-sub">FORZA HORIZON MOTION CONTROLLER & TELEMETRY ENGINE</span>
+        </div>
+      </div>
+
+      <div class="header-status-group">
+        <div class="status-pill status-driver">
+          <span class="status-dot green"></span>
+          <span class="pill-label">ViGEmBus: ACTIVE</span>
+        </div>
+        <div class="status-pill status-network" id="pill-net-status">
+          <span class="status-dot cyan"></span>
+          <span id="label-net-status" class="pill-label">PORTS 8443 / 5300</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Grid Dashboard -->
+    <main class="dashboard-grid">
+      <!-- LEFT COLUMN: Connection & QR Code Card -->
+      <section class="dash-card qr-connection-card">
+        <div class="card-header">
+          <h2 class="card-title">📱 CONNECT YOUR PHONE</h2>
+          <span class="badge-tag live-badge">READY</span>
+        </div>
+
+        <div class="qr-box-wrapper">
+          <div class="qr-neon-frame">
+            <div id="qr-code-img" class="qr-canvas-placeholder">
+              <!-- QR Code dynamic render -->
+              <img id="qr-img-element" src="" alt="Scan QR code with phone" />
+            </div>
+          </div>
+          <span class="qr-hint">Scan with iPhone Camera or Android QR Reader</span>
+        </div>
+
+        <!-- Connection URL Pills -->
+        <div class="connection-links-list">
+          <div class="link-item usb-link-item">
+            <div class="link-info">
+              <span class="link-tag usb-tag">⚡ USB WIRED (0.2ms)</span>
+              <span id="url-usb" class="link-url">https://localhost:8443</span>
+            </div>
+            <button class="btn-copy" onclick="copyLink('url-usb', this)" title="Copy USB URL">📋 COPY</button>
+          </div>
+
+          <div class="link-item wifi-link-item">
+            <div class="link-info">
+              <span class="link-tag wifi-tag">📶 5GHz WI-FI (QoS)</span>
+              <span id="url-wifi" class="link-url">https://10.192.134.151:8443</span>
+            </div>
+            <button class="btn-copy" onclick="copyLink('url-wifi', this)" title="Copy Wi-Fi URL">📋 COPY</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT COLUMN: Real-Time Engine & Live Forza Telemetry Monitor -->
+      <div class="right-stack">
+        <!-- Live System Performance Stats -->
+        <section class="dash-card stats-card">
+          <div class="card-header">
+            <h2 class="card-title">⚡ REAL-TIME ENGINE PERFORMANCE</h2>
+            <span id="badge-client-mode" class="badge-tag client-badge">STANDBY</span>
+          </div>
+
+          <div class="stats-row">
+            <div class="stat-box">
+              <span class="stat-icon">⏱️</span>
+              <div class="stat-details">
+                <span class="stat-label">ROUND-TRIP LATENCY</span>
+                <span id="stat-latency" class="stat-value neon-cyan">0.23 ms</span>
+                <span class="stat-sub">Windows 1ms Kernel Timer</span>
+              </div>
+            </div>
+
+            <div class="stat-box">
+              <span class="stat-icon">🏎️</span>
+              <div class="stat-details">
+                <span class="stat-label">PACKET FREQUENCY</span>
+                <span id="stat-pps" class="stat-value neon-orange">240 Hz</span>
+                <span class="stat-sub">Native C-Speed Framing</span>
+              </div>
+            </div>
+
+            <div class="stat-box">
+              <span class="stat-icon">📡</span>
+              <div class="stat-details">
+                <span class="stat-label">ACTIVE CLIENT</span>
+                <span id="stat-device" class="stat-value">Waiting for Phone...</span>
+                <span id="stat-conn-type" class="stat-sub">Wired USB or 5GHz Wi-Fi</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Live Forza Horizon In-Game Telemetry PC Mirror -->
+        <section class="dash-card telemetry-card">
+          <div class="card-header">
+            <div class="title-with-pill">
+              <h2 class="card-title">🏎️ LIVE FORZA TELEMETRY MIRROR</h2>
+              <span class="port-tag">UDP :5300</span>
+            </div>
+            <button id="btn-desktop-demo" class="btn-action-small" onclick="toggleDesktopDemo()">
+              🏁 TOGGLE DEMO RACE
+            </button>
+          </div>
+
+          <!-- Shift Lights Bar Mirror -->
+          <div class="desktop-shift-lights" id="dt-shift-lights">
+            <span class="dt-dot" data-idx="0"></span>
+            <span class="dt-dot" data-idx="1"></span>
+            <span class="dt-dot" data-idx="2"></span>
+            <span class="dt-dot" data-idx="3"></span>
+            <span class="dt-dot" data-idx="4"></span>
+            <span class="dt-dot" data-idx="5"></span>
+            <span class="dt-dot" data-idx="6"></span>
+            <span class="dt-dot" data-idx="7"></span>
+            <span class="dt-dot" data-idx="8"></span>
+            <span class="dt-dot" data-idx="9"></span>
+          </div>
+
+          <!-- Telemetry Dials Grid -->
+          <div class="telem-dials-grid">
+            <div class="dial-box gear-box">
+              <span class="dial-sub">GEAR</span>
+              <span id="dt-gear" class="dial-num gear-num">N</span>
+            </div>
+
+            <div class="dial-box speed-box">
+              <span class="dial-sub">SPEED</span>
+              <span id="dt-speed" class="dial-num speed-num">0</span>
+              <span class="dial-unit">MPH</span>
+            </div>
+
+            <div class="dial-box rpm-box">
+              <span class="dial-sub">ENGINE RPM</span>
+              <span id="dt-rpm" class="dial-num rpm-num">0</span>
+              <span class="dial-unit">MAX 8,500</span>
+            </div>
+
+            <div class="dial-box boost-box">
+              <span class="dial-sub">TURBO BOOST</span>
+              <span id="dt-boost" class="dial-num boost-num">0.0</span>
+              <span class="dial-unit">PSI</span>
+            </div>
+
+            <div class="dial-box slip-box" id="dt-slip-box">
+              <span class="dial-sub">TIRE TRACTION</span>
+              <span id="dt-slip" class="dial-num slip-num">100%</span>
+              <span class="dial-unit">GRIP</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Quick Utilities & Actions -->
+        <section class="dash-card utilities-card">
+          <div class="utility-actions-row">
+            <button class="btn-utility" onclick="openJoyCpl()" title="Open Windows Game Controllers panel to test live inputs">
+              🎮 Test in Windows joy.cpl
+            </button>
+            <button class="btn-utility" onclick="restartAdb()" title="Re-initialize ADB Reverse USB forwarding">
+              🔌 Restart USB ADB Reverse
+            </button>
+            <button class="btn-utility" onclick="openWebLink()" title="Open web interface in local browser">
+              🌐 Open Web Gamepad
+            </button>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <span>PocketPad v2.4 • Native C-Speed Binary Engine • ViGEmBus Xbox 360 Controller</span>
+      <span class="footer-tip">💡 Tip: In Forza Horizon, set Data Out = ON, IP = 127.0.0.1, Port = 5300</span>
+    </footer>
+  </div>
+
+  <script src="desktop.js"></script>
+</body>
+</html>
