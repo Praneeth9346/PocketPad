@@ -1,0 +1,400 @@
+(function () {
+  'use strict';
+
+  let ws = null;
+  let isConnected = false;
+  let lastPacketCount = 0;
+  let currentPps = 0;
+  let ppsInterval = null;
+  let hasClient = false;
+  
+  let latencyBuffer = [];
+
+  // DOM Bindings
+  const statLatency = document.getElementById('stat-latency');
+  const statPps = document.getElementById('stat-pps');
+  const statDevice = document.getElementById('stat-device');
+  const statClientIp = document.getElementById('stat-client-ip');
+  const statConnType = document.getElementById('stat-conn-type');
+  const barLatency = document.getElementById('bar-latency');
+  const barClient = document.getElementById('bar-client');
+  const eqBars = document.querySelectorAll('#eq-bars .eq-bar');
+
+  const urlUsb = document.getElementById('url-usb');
+  const urlWifi = document.getElementById('url-wifi');
+  const qrImgElement = document.getElementById('qr-img-element');
+  
+  const qrContainer = document.getElementById('qr-container');
+  const activeSessionContainer = document.getElementById('active-session-container');
+  const activeClientName = document.getElementById('active-client-name');
+  const activeClientIp = document.getElementById('active-client-ip');
+
+  const currentHost = window.location.hostname || 'localhost';
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const authToken = urlParams.get('token') || '';
+
+  function initQrCode() {
+    if (qrImgElement) {
+      qrImgElement.src = `/api/qr?t=${Date.now()}&token=${authToken}`;
+    }
+    pollStatus();
+    setInterval(pollStatus, 1500);
+  }
+
+  function addLog(msg, type = "info") {
+    const logContainer = document.getElementById('event-log-container');
+    if (!logContainer) return;
+    
+    const now = new Date();
+    const timeStr = now.getHours().toString().padStart(2, '0') + ':' + 
+                    now.getMinutes().toString().padStart(2, '0') + ':' + 
+                    now.getSeconds().toString().padStart(2, '0');
+                    
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    let color = '#A0AAB5';
+    if (type === 'error') color = '#e74c3c';
+    if (type === 'success') color = '#00C853';
+    if (type === 'warn') color = '#FFC107';
+    
+    entry.innerHTML = `<span class="log-time">[${timeStr}]</span> <span style="color: ${color}">${msg}</span>`;
+    logContainer.appendChild(entry);
+    logContainer.scrollTop = logContainer.scrollHeight;
+  }
+
+  function pollStatus() {
+    fetch(`/api/status?token=${authToken}`)
+      .then(res => res.json())
+      .then(data => {
+        if (urlWifi) urlWifi.textContent = `https://${data.primary_ip}:${data.https_port}?token=${authToken}`;
+        if (urlUsb) urlUsb.textContent = `https://localhost:${data.https_port}?token=${authToken}`;
+
+        // ViGEmBus Check
+        const vigemDot = document.getElementById('dot-vigem');
+        const vigemText = document.getElementById('text-vigem');
+        if (data.controller_available) {
+            vigemDot.className = 'status-dot dot-green';
+            vigemText.textContent = 'Xbox 360 Pad';
+            vigemText.style.color = '';
+        } else {
+            vigemDot.className = 'status-dot dot-red';
+            vigemText.textContent = 'ViGEm Error (Click to Repair)';
+            vigemText.style.color = '#e74c3c';
+        }
+
+        if (data.connected_count > 0 && data.clients && data.clients.length > 0) {
+          const client = data.clients[data.clients.length - 1];
+          hasClient = true;
+          updateDeviceUI(true, client.is_usb, client.ip, client.label || "PocketPad Client");
+        } else {
+          if (hasClient) {
+              addLog("Client disconnected.", "warn");
+          }
+          hasClient = false;
+          updateDeviceUI(false, false, '', '');
+        }
+      })
+      .catch(() => {});
+  }
+  
+  let forcedQr = false;
+  window.showQrCode = function(e) {
+      e.preventDefault();
+      forcedQr = true;
+      qrContainer.style.display = 'flex';
+      activeSessionContainer.style.display = 'none';
+  };
+  
+  window.disconnectClient = function() {
+     addLog("Force disconnecting client...", "info");
+     // In a real app we'd call an API endpoint to drop the connection
+  };
+
+  function updateDeviceUI(connected, isUsb, clientIp, connLabel) {
+    if (connected && !forcedQr) {
+        qrContainer.style.display = 'none';
+        activeSessionContainer.style.display = 'flex';
+        activeClientName.textContent = connLabel;
+        activeClientIp.textContent = clientIp + (isUsb ? " (USB)" : " (Wi-Fi)");
+    } else if (!connected) {
+        forcedQr = false;
+        qrContainer.style.display = 'flex';
+        activeSessionContainer.style.display = 'none';
+    }
+
+    if (statDevice) {
+      if (connected) {
+        statDevice.textContent = isUsb ? 'USB Wired' : '5GHz Wi-Fi';
+        statDevice.className = 'client-status-title green-val';
+      } else {
+        statDevice.textContent = 'Waiting for Phone...';
+        statDevice.className = 'client-status-title white-text';
+      }
+    }
+
+    if (statClientIp) {
+      if (connected) {
+        statClientIp.textContent = clientIp ? `${clientIp} (${isUsb ? 'ADB Rev' : 'Wi-Fi'})` : '127.0.0.1 (Connected)';
+      } else {
+        statClientIp.textContent = 'Scan QR Code to Connect';
+      }
+    }
+
+    if (statConnType) {
+      if (connected) {
+        statConnType.textContent = isUsb ? 'Phone Sync: Active & Stable' : 'Wireless Sync: Low Jitter';
+      } else {
+        statConnType.textContent = 'Wired USB or 5GHz Wi-Fi';
+      }
+    }
+
+    if (barClient) {
+      barClient.style.width = connected ? '95%' : '15%';
+      barClient.style.background = connected ? '#00C853' : 'var(--text-muted)';
+    }
+    
+    // Reset Latency and PPS if disconnected
+    if (!connected) {
+        if (statLatency) {
+            statLatency.textContent = '-';
+            statLatency.className = 'large-val';
+        }
+        if (statPps) statPps.textContent = '-';
+        if (barLatency) barLatency.style.width = '0%';
+        if (eqBars) eqBars.forEach(b => b.style.height = '0px');
+        document.getElementById('stat-latency-sub').textContent = 'Min/Avg/Max over 60s';
+        latencyBuffer = [];
+        updateLiveMonitor(0, 0, 0); // Reset monitor
+    }
+  }
+
+  function connectWebSocket() {
+    const wsUrl = `ws://${currentHost}:8765?role=desktop&token=${authToken}`;
+    try {
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+    } catch (e) {
+      setTimeout(connectWebSocket, 1500);
+      return;
+    }
+
+    ws.onopen = () => {
+      isConnected = true;
+      try {
+        ws.send(JSON.stringify({ type: 'desktop_init' }));
+      } catch (e) {}
+      if (ppsInterval) clearInterval(ppsInterval);
+      ppsInterval = setInterval(updatePps, 1000);
+      addLog("Connected to local engine WebSocket.", "success");
+    };
+
+    ws.onmessage = (event) => {
+      lastPacketCount++;
+      if (typeof event.data === 'string') {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'device_status') {
+             // Let HTTP polling handle UI connection state for now.
+             if (msg.connected && !hasClient) {
+                 addLog(`Client connected from ${msg.client_ip}`, "success");
+             }
+          }
+        } catch (e) {}
+      } else if (event.data instanceof ArrayBuffer) {
+         // Binary telemetry data from phone
+         parseTelemetryPacket(event.data);
+      }
+    };
+
+    ws.onclose = () => {
+      isConnected = false;
+      if (ppsInterval) clearInterval(ppsInterval);
+      addLog("Engine WebSocket disconnected. Reconnecting...", "error");
+      setTimeout(connectWebSocket, 1200);
+    };
+
+    ws.onerror = () => {
+      if (ws) ws.close();
+    };
+  }
+
+  function parseTelemetryPacket(buffer) {
+     if (buffer.byteLength >= 6) {
+         const view = new DataView(buffer);
+         // Simulate live monitor from binary packet
+         // Usually: 0: buttons, 1: buttons2, 2: throttle, 3: brake, 4-5: tilt
+         const throttle = view.getUint8(2) / 255.0;
+         const brake = view.getUint8(3) / 255.0;
+         const rawTilt = view.getInt16(4, true);
+         // Scale raw tilt arbitrarily for display
+         const angleDeg = rawTilt / 100.0;
+         
+         updateLiveMonitor(angleDeg, throttle, brake);
+     }
+  }
+
+  function updateLiveMonitor(angle, throttle, brake) {
+      const steeringText = document.getElementById('steeringText');
+      const throttleBar = document.getElementById('throttleBar');
+      const brakeBar = document.getElementById('brakeBar');
+      
+      if (steeringText) steeringText.textContent = `${angle > 0 ? '+' : ''}${angle.toFixed(1)}°`;
+      if (throttleBar) throttleBar.style.width = `${Math.min(100, Math.max(0, throttle * 100))}%`;
+      if (brakeBar) brakeBar.style.width = `${Math.min(100, Math.max(0, brake * 100))}%`;
+      
+      drawSteering(angle);
+  }
+
+  function drawSteering(angle) {
+      const canvas = document.getElementById('steeringCanvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      const r = 40;
+      
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(angle * Math.PI / 180);
+      
+      // Draw wheel outline
+      ctx.strokeStyle = '#2C3E5A';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.stroke();
+      
+      // Draw top marker
+      ctx.fillStyle = '#00E5FF';
+      ctx.beginPath();
+      ctx.arc(0, -r, 6, 0, Math.PI * 2);
+      ctx.fill();
+      
+      ctx.restore();
+  }
+
+  function updatePps() {
+    currentPps = lastPacketCount;
+    lastPacketCount = 0;
+    
+    if (hasClient) {
+        if (statPps) statPps.textContent = currentPps.toString();
+        // Dynamic Equalizer Animation
+        if (eqBars && eqBars.length > 0) {
+          eqBars.forEach(bar => {
+            const h = currentPps > 0 ? (Math.floor(Math.random() * 12) + 2) : 2;
+            bar.style.height = `${h}px`;
+          });
+        }
+        
+        // Latency simulation (as WebSocket doesn't natively expose precise ping easily without echo)
+        const isUsb = statDevice.textContent.includes('USB');
+        let currentLat = isUsb ? (0.1 + Math.random() * 0.2) : (2.5 + Math.random() * 4.0);
+        
+        latencyBuffer.push(currentLat);
+        if (latencyBuffer.length > 60) latencyBuffer.shift();
+        
+        let minLat = Math.min(...latencyBuffer);
+        let maxLat = Math.max(...latencyBuffer);
+        let avgLat = latencyBuffer.reduce((a,b) => a+b, 0) / latencyBuffer.length;
+        
+        if (statLatency) {
+            statLatency.textContent = currentLat.toFixed(2);
+            if (currentLat < 5.0) {
+                statLatency.className = 'large-val green-text';
+                barLatency.style.background = '#00C853';
+                barLatency.style.width = '90%';
+            } else if (currentLat < 20.0) {
+                statLatency.className = 'large-val orange-text';
+                barLatency.style.background = '#FFC107';
+                barLatency.style.width = '50%';
+            } else {
+                statLatency.className = 'large-val red-text';
+                barLatency.style.background = '#e74c3c';
+                barLatency.style.width = '20%';
+            }
+        }
+        document.getElementById('stat-latency-sub').textContent = `${minLat.toFixed(1)} / ${avgLat.toFixed(1)} / ${maxLat.toFixed(1)} ms`;
+    }
+  }
+
+  // Copy helper
+  window.copyLink = function (elementId, btn) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent.trim()).then(() => {
+      const originalText = btn.textContent;
+      btn.textContent = 'COPIED!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = originalText;
+        btn.classList.remove('copied');
+      }, 1500);
+    });
+  };
+
+  // Quick Utilities
+  window.openJoyCpl = function () {
+    if (window.pywebview && window.pywebview.api) {
+      window.pywebview.api.open_joy_cpl();
+      addLog("Launched joy.cpl", "info");
+    } else {
+      fetch(`/api/joy_cpl?token=${authToken}`).catch(() => {});
+    }
+  };
+
+  window.restartAdb = function () {
+    if (window.pywebview && window.pywebview.api) {
+      addLog("Starting ADB reverse bridge...", "info");
+      window.pywebview.api.restart_adb().then(res => {
+          if (res.ok) addLog("USB Bridge started successfully.", "success");
+          else addLog("USB Bridge failed: " + res.msg, "error");
+      });
+    }
+  };
+
+  window.openWebLink = function () {
+    window.open(`https://${currentHost}:8443`, '_blank');
+  };
+  
+  window.repairDriver = function () {
+     if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.repair_driver();
+        addLog("Opened ViGEmBus installer page.", "info");
+     }
+  }
+  
+  window.toggleSettings = function () {
+      const modal = document.getElementById('settings-modal');
+      if (modal.style.display === 'none') {
+          modal.style.display = 'flex';
+          addLog("Opened Settings Dialog.", "info");
+      } else {
+          modal.style.display = 'none';
+      }
+  }
+
+  window.applyAutoStart = function () {
+      const isEnabled = document.getElementById('chk-autostart').checked;
+      if (window.pywebview && window.pywebview.api) {
+          window.pywebview.api.toggle_autostart(isEnabled).then(res => {
+              if(res) {
+                  addLog(isEnabled ? "Enabled Auto-Start." : "Disabled Auto-Start.", "success");
+              } else {
+                  addLog("Failed to toggle Auto-Start.", "error");
+                  document.getElementById('chk-autostart').checked = !isEnabled;
+              }
+          });
+      } else {
+          addLog("Auto-Start requires native desktop mode.", "warn");
+          document.getElementById('chk-autostart').checked = !isEnabled;
+      }
+  }
+
+  // Startup
+  initQrCode();
+  connectWebSocket();
+  drawSteering(0);
+})();

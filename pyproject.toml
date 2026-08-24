@@ -1,0 +1,124 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pocketpad"
+version = "1.1.0"
+description = "Smartphone-based racing controller for PC games"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Praneeth9346", email = "praneeth@example.com"}
+]
+keywords = ["racing", "controller", "gamepad", "forza", "telemetry"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Games/Entertainment",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+]
+dependencies = [
+    "aiohttp>=3.8,<4.0",
+    "websockets>=10.0,<11.0",
+    "opencv-python>=4.5,<5.0",
+    "numpy>=1.21,<2.0",
+    "pillow>=9.0,<10.0",
+    "psutil>=5.9,<6.0",
+    "zeroconf>=0.38,<0.40",
+    "aiortc>=1.3,<2.0",
+    "cryptography>=38.0,<40.0",
+    "pyOpenSSL>=22.0,<23.0",
+    "pyusb>=1.2,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0,<8.0",
+    "pytest-asyncio>=0.20,<0.21",
+    "pytest-cov>=4.0,<5.0",
+    "black>=22.0,<23.0",
+    "flake8>=5.0,<6.0",
+    "mypy>=0.991,<1.0",
+    "isort>=5.10,<6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Praneeth9346/PocketPad"
+Repository = "https://github.com/Praneeth9346/PocketPad"
+Documentation = "https://github.com/Praneeth9346/PocketPad/blob/main/POCKETPAD_MASTER_DOCUMENTATION.md"
+"Bug Tracker" = "https://github.com/Praneeth9346/PocketPad/issues"
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["pocketpad"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "if __debug__",
+]

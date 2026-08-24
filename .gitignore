@@ -1,0 +1,43 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*.class
+*.log
+
+# PyInstaller Temporary Build Cache
+build/
+
+# Local Auto-Generated SSL Certificates
+cert.pem
+key.pem
+
+# OS & Environment
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Signing & Secrets
+keystore.properties
+*.jks
+*.keystore
+local.properties
+
+# Missing Android and Python build caches
+.gradle/
+.kotlin/
+.ruff_cache/
+app/build/
+dist/
+
+dist/
+.gradle/
+build/
+adb_tools/
+.pocketpad_token
+cert.pem
+key.pem
+
+# Deliverables binaries (kept locally in project folder)
+deliverables/*.exe
+deliverables/*.apk

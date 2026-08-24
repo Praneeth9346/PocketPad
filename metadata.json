@@ -1,0 +1,6 @@
+{
+  "name": "PocketPad Pro",
+  "description": "Esports-grade virtual racing wheel & Xbox 360 controller with motion gyro steering, analog canvas pedals, and live telemetry cockpit.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF07090E</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="forza_cyan">#FF00F0FF</color>
+    <color name="forza_magenta">#FFFF0055</color>
+    <color name="forza_yellow">#FFFFD600</color>
+    <color name="forza_green">#FF39FF14</color>
+    <color name="surface_dark">#FF0E131F</color>
+</resources>
