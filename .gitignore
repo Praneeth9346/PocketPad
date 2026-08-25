@@ -37,3 +37,9 @@ deliverables/*.exe
 deliverables/*.apk
 deliverables/web/
 deliverables/*.pem
+
+# DroidBot Environment & Screenshot Outputs
+.venv-droidbot/
+tools/droidbot_src/
+ui_screenshots/
+
