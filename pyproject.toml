@@ -48,7 +48,7 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/Praneeth9346/PocketPad"
 Repository = "https://github.com/Praneeth9346/PocketPad"
-Documentation = "https://github.com/Praneeth9346/PocketPad/blob/main/POCKETPAD_MASTER_DOCUMENTATION.md"
+Documentation = "https://github.com/Praneeth9346/PocketPad#readme"
 "Bug Tracker" = "https://github.com/Praneeth9346/PocketPad/issues"
 
 [tool.black]
