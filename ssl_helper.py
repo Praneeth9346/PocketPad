@@ -111,12 +111,97 @@ def generate_ca() -> None:
 
 
 def sync_ca_to_android() -> None:
-    """Explicit developer command to sync CA certificate to Android raw resource."""
-    generate_ca()
-    target = BASE_DIR / "app" / "src" / "main" / "res" / "raw" / "pocketpad_ca.crt"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(CA_CERT_FILE.read_bytes())
-    print(f"CA copied to {target}")
+    """
+    Copy the exact PocketPad Root CA certificate used by the
+    Python server into the Android project's raw resources.
+    """
+    if not CA_CERT_FILE.exists():
+        raise FileNotFoundError(
+            f"CA certificate not found: {CA_CERT_FILE}"
+        )
+
+    target = (
+        BASE_DIR
+        / "app"
+        / "src"
+        / "main"
+        / "res"
+        / "raw"
+        / "pocketpad_ca.crt"
+    )
+
+    target.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    source_bytes = CA_CERT_FILE.read_bytes()
+
+    target.write_bytes(source_bytes)
+
+    print(
+        f"[TLS] Android CA synchronized: {target}"
+    )
+
+
+def verify_android_ca_sync() -> None:
+    """
+    Verify that Android trusts exactly the same Root CA
+    used by the Python server.
+    """
+    target = (
+        BASE_DIR
+        / "app"
+        / "src"
+        / "main"
+        / "res"
+        / "raw"
+        / "pocketpad_ca.crt"
+    )
+
+    if not CA_CERT_FILE.exists():
+        raise FileNotFoundError(
+            f"Server CA not found: {CA_CERT_FILE}"
+        )
+
+    if not target.exists():
+        raise FileNotFoundError(
+            f"Android CA not found: {target}"
+        )
+
+    server_ca = (
+        x509.load_pem_x509_certificate(
+            CA_CERT_FILE.read_bytes()
+        )
+    )
+
+    android_ca = (
+        x509.load_pem_x509_certificate(
+            target.read_bytes()
+        )
+    )
+
+    server_fingerprint = (
+        server_ca.fingerprint(
+            hashes.SHA256()
+        )
+    )
+
+    android_fingerprint = (
+        android_ca.fingerprint(
+            hashes.SHA256()
+        )
+    )
+
+    if server_fingerprint != android_fingerprint:
+        raise RuntimeError(
+            "PocketPad CA mismatch: "
+            "server CA and Android CA are different."
+        )
+
+    print(
+        "[TLS] Server CA and Android CA match."
+    )
 
 
 def generate_server_certificate(local_ips: list[str] | None = None) -> None:
@@ -261,7 +346,30 @@ def get_ssl_context(
 
 
 if __name__ == "__main__":
-    generate_ca()
-    generate_server_certificate()
-    sync_ca_to_android()
-    print("[+] PocketPad CA and Server Certificate successfully generated and verified.")
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="PocketPad TLS utilities"
+    )
+
+    parser.add_argument(
+        "--sync-android-ca",
+        action="store_true",
+        help="Copy server Root CA to Android resources",
+    )
+
+    parser.add_argument(
+        "--verify-android-ca",
+        action="store_true",
+        help="Verify Android CA matches server Root CA",
+    )
+
+    args = parser.parse_args()
+
+    if args.sync_android_ca:
+        generate_ca()
+        sync_ca_to_android()
+        verify_android_ca_sync()
+
+    elif args.verify_android_ca:
+        verify_android_ca_sync()
