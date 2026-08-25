@@ -1,4 +1,4 @@
-name: Release Build
+name: PocketPad Release
 
 on:
   push:
@@ -6,13 +6,39 @@ on:
       - "v*"
 
 jobs:
-  build-release:
-    name: Build Production Release Artifacts
+  verify:
+    name: Verify Python Tests & Strict Linting
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Dependencies & Linters
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio black isort flake8
+
+      - name: Run Test Suite
+        run: pytest -v -m "not hardware"
+
+      - name: Check Code Quality Gates
+        run: |
+          black --check . --exclude "(\.gradle|build|dist|app)" --line-length 120
+          isort --check-only . --skip .gradle --skip build --skip dist --skip app
+          flake8 . --count --max-line-length=120 --exclude=.gradle,build,dist,app,.system_generated,.git --statistics
+
+  android:
+    name: Build & Sign Android Release Artifacts
+    needs: verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -20,19 +46,22 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
 
       - name: Grant Execute Permission for Gradlew
         run: chmod +x gradlew
 
-      - name: Configure Keystore (if secrets present)
+      - name: Unit Tests
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Restore Signing Keystore (from CI secrets)
         if: env.ANDROID_KEYSTORE_B64 != ''
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
         run: |
           echo "$ANDROID_KEYSTORE_B64" | base64 --decode > release-keystore.jks
           cat > keystore.properties <<EOF
@@ -46,13 +75,16 @@ jobs:
         run: ./gradlew :app:assembleRelease
 
       - name: Generate Checksums
+        shell: bash
         run: |
-          mkdir -p artifacts
-          cp app/build/outputs/apk/release/*.apk artifacts/PocketPad-release.apk
-          cd artifacts && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+          mkdir -p release_dist
+          cp app/build/outputs/apk/release/*.apk release_dist/PocketPad-release.apk
+          cd release_dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pocketpad-release-artifacts
-          path: artifacts/*
+          name: PocketPad-release
+          path: |
+            release_dist/*.apk
+            release_dist/SHA256SUMS.txt

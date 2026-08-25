@@ -1,4 +1,5 @@
 import ctypes
+import os
 import struct
 import sys
 import threading
@@ -52,7 +53,19 @@ PACKET_LENGTHS = {
     OP_MOUSE: 6,
     OP_MEDIA: 2,
     OP_PING: 5,
+    OP_LATENCY_PROBE: 13,
 }
+
+
+def validate_packet(packet: bytes) -> bool:
+    """Validate binary packet structure and length against protocol specification."""
+    if not packet:
+        return False
+    expected_length = PACKET_LENGTHS.get(packet[0])
+    if expected_length is None:
+        return False
+    return len(packet) == expected_length
+
 
 # Whitelisted Media Keys (0xAD=Mute, 0xAE=VolDown, 0xAF=VolUp, 0xB0=Next, 0xB1=Prev, 0xB2=Stop, 0xB3=Play/Pause)
 ALLOWED_MEDIA_KEYS = {0xAD, 0xAE, 0xAF, 0xB0, 0xB1, 0xB2, 0xB3}
@@ -146,7 +159,7 @@ class GamepadBridge:
             except Exception:
                 pass
 
-        if VGAMEPAD_AVAILABLE:
+        if VGAMEPAD_AVAILABLE and not os.environ.get("POCKETPAD_DISABLE_VGAMEPAD"):
             try:
                 self.gamepad = vg.VX360Gamepad()
                 self.controller_available = True
@@ -167,6 +180,54 @@ class GamepadBridge:
         else:
             self.controller_error = "vgamepad module not installed"
             print("[GamepadBridge] vgamepad not available — controller output disabled.")
+
+    @property
+    def steering(self) -> int:
+        with self.lock:
+            if self.gamepad and hasattr(self.gamepad, "report"):
+                return getattr(self.gamepad.report, "sThumbLX", 0)
+            return int(self.lx * 32767)
+
+    @property
+    def throttle(self) -> int:
+        with self.lock:
+            if self.gamepad and hasattr(self.gamepad, "report"):
+                return getattr(self.gamepad.report, "bRightTrigger", 0)
+            return int(self.rt * 255)
+
+    @property
+    def brake(self) -> int:
+        with self.lock:
+            if self.gamepad and hasattr(self.gamepad, "report"):
+                return getattr(self.gamepad.report, "bLeftTrigger", 0)
+            return int(self.lt * 255)
+
+    def set_steering(self, val: int):
+        with self.lock:
+            val = clamp(val, -32768, 32767)
+            self.lx = val / 32767.0
+            if self.gamepad:
+                self.gamepad.report.sThumbLX = val
+                self.gamepad.update()
+
+    def set_trigger(self, val: int):
+        with self.lock:
+            val = clamp(val, 0, 255)
+            self.rt = val / 255.0
+            if self.gamepad:
+                self.gamepad.report.bRightTrigger = val
+                self.gamepad.update()
+
+    def set_pedals(self, brake: int, throttle: int):
+        with self.lock:
+            b_clamped = clamp(brake, 0, 255)
+            t_clamped = clamp(throttle, 0, 255)
+            self.lt = b_clamped / 255.0
+            self.rt = t_clamped / 255.0
+            if self.gamepad:
+                self.gamepad.report.bLeftTrigger = b_clamped
+                self.gamepad.report.bRightTrigger = t_clamped
+                self.gamepad.update()
 
     def reset(self):
         """Reset all inputs to neutral state."""
@@ -198,19 +259,18 @@ class GamepadBridge:
         """
         Fastest path C-speed binary packet dispatcher (< 0.0001 ms) with centralized length validation.
         """
-        if not data:
+        if not validate_packet(data):
             return None
 
         opcode = data[0]
-        expected_len = PACKET_LENGTHS.get(opcode)
-        if expected_len is not None and len(data) != expected_len:
-            return None
 
         if not self.gamepad:
-            # Still handle ping even without controller
+            # Still handle ping and latency probe even without controller
             if opcode == OP_PING and len(data) == 5:
                 self.pong_buffer[1:5] = data[1:5]
                 return bytes(self.pong_buffer)
+            elif opcode == OP_LATENCY_PROBE and len(data) == 13:
+                return b"\x20" + data[1:13]
             return None
 
         # 0x00: Radio Keepalive (Instant Return)
@@ -331,6 +391,10 @@ class GamepadBridge:
                 self.keybd_event(key_code, 0, 0, 0)
                 self.keybd_event(key_code, 0, 2, 0)
             return None
+
+        # 0x20: Diagnostic Latency Probe (13 bytes)
+        elif opcode == OP_LATENCY_PROBE:
+            return b"\x20" + data[1:13]
 
         return None
 

@@ -130,8 +130,25 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
         }
     )
 
+    private var previousSampleNs = 0L
+    private val _measuredSensorHz = MutableStateFlow(0f)
+    val measuredSensorHz: StateFlow<Float> = _measuredSensorHz.asStateFlow()
+
+    private fun recordSensorSample() {
+        val now = System.nanoTime()
+        if (previousSampleNs != 0L) {
+            val deltaNs = now - previousSampleNs
+            if (deltaNs > 0) {
+                val instantHz = 1_000_000_000f / deltaNs.toFloat()
+                _measuredSensorHz.value = _measuredSensorHz.value * 0.9f + instantHz * 0.1f
+            }
+        }
+        previousSampleNs = now
+    }
+
     private var lastSteerSend = 0L
     private val motionManager = MotionSensorManager(application) { norm, visualDeg, rawDeg ->
+        recordSensorSample()
         _steerNormalized.value = norm
         _visualSteerAngle.value = visualDeg
         _rawTiltDeg.value = rawDeg

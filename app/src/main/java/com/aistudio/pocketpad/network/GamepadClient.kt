@@ -60,25 +60,23 @@ class GamepadClient(
         }
     }
 
-    private val okHttpClient: OkHttpClient = try {
+    private fun createSecureHttpClient(): OkHttpClient {
         val trustManager = createPocketPadTrustManager()
         val sslContext = createSslContext(trustManager)
         val sslSocketFactory = sslContext.socketFactory
 
-        OkHttpClient.Builder()
+        return OkHttpClient.Builder()
             .sslSocketFactory(sslSocketFactory, trustManager)
             .connectTimeout(3, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .writeTimeout(0, TimeUnit.MILLISECONDS)
             .retryOnConnectionFailure(true)
             .build()
-    } catch (_: Exception) {
-        OkHttpClient.Builder()
-            .connectTimeout(3, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            .writeTimeout(0, TimeUnit.MILLISECONDS)
-            .retryOnConnectionFailure(true)
-            .build()
+    }
+
+    // Fail visibly if TLS / trust configuration is broken, never fall back to plain client
+    private val okHttpClient: OkHttpClient by lazy {
+        createSecureHttpClient()
     }
 
     private var webSocket: WebSocket? = null
@@ -90,10 +88,11 @@ class GamepadClient(
     private var connectionGeneration: Long = 0L
     private var lastPingSendTimeNs: Long = 0L
 
-    // Packet rate monitoring
-    private var packetsSent = 0
-    private var lastRateTimeNs = System.nanoTime()
-    var packetsPerSecond: Int = 0
+    // Real packet send rate tracking
+    private var sentPackets = 0
+    private var rateStartNs = System.nanoTime()
+
+    var transmitRateHz: Float = 0f
         private set
 
     // Pre-allocated ByteBuffers for zero-allocation hot path
@@ -103,6 +102,7 @@ class GamepadClient(
     private val leftStickBuffer = ByteBuffer.allocate(5).order(ByteOrder.LITTLE_ENDIAN)
     private val rightStickBuffer = ByteBuffer.allocate(5).order(ByteOrder.LITTLE_ENDIAN)
     private val pingBuffer = ByteBuffer.allocate(5).order(ByteOrder.LITTLE_ENDIAN)
+    private val latencyProbeBuffer = ByteBuffer.allocate(13).order(ByteOrder.LITTLE_ENDIAN)
     private val mouseBuffer = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN)
     private val mediaBuffer = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN)
     private val keepaliveBuffer = ByteBuffer.allocate(1)
@@ -207,6 +207,16 @@ class GamepadClient(
                             onPingMeasured(rttMs)
                         }
                     }
+                    Protocol.LATENCY_PROBE -> {
+                        if (byteArray.size >= 13) {
+                            val buffer = ByteBuffer.wrap(byteArray).order(ByteOrder.LITTLE_ENDIAN)
+                            buffer.get() // Opcode
+                            val seq = buffer.int
+                            val clientSendNs = buffer.long
+                            val roundTripMs = (System.nanoTime() - clientSendNs) / 1_000_000f
+                            onPingMeasured(roundTripMs)
+                        }
+                    }
                     Protocol.RUMBLE -> {
                         if (byteArray.size >= 3) {
                             val large = (byteArray[1].toInt() and 0xFF) / 255f
@@ -285,14 +295,15 @@ class GamepadClient(
         authenticated = false
     }
 
-    private fun trackPacketSent() {
-        packetsSent++
+    private fun recordPacketSent() {
+        sentPackets++
         val now = System.nanoTime()
-        val elapsed = (now - lastRateTimeNs) / 1_000_000_000.0
-        if (elapsed >= 1.0) {
-            packetsPerSecond = (packetsSent / elapsed).toInt()
-            packetsSent = 0
-            lastRateTimeNs = now
+        val elapsedNs = now - rateStartNs
+        if (elapsedNs >= 1_000_000_000L) {
+            val elapsedSeconds = elapsedNs / 1_000_000_000f
+            transmitRateHz = sentPackets / elapsedSeconds
+            sentPackets = 0
+            rateStartNs = now
         }
     }
 
@@ -308,7 +319,7 @@ class GamepadClient(
         steerBuffer.put(Protocol.STEER)
         steerBuffer.putShort(steeringX)
         webSocket?.send(steerBuffer.array().toByteString())
-        trackPacketSent()
+        recordPacketSent()
     }
 
     fun sendPedals(brake: Float, throttle: Float) {
@@ -324,7 +335,7 @@ class GamepadClient(
         pedalBuffer.put(brake.coerceIn(0, 255).toByte())
         pedalBuffer.put(throttle.coerceIn(0, 255).toByte())
         webSocket?.send(pedalBuffer.array().toByteString())
-        trackPacketSent()
+        recordPacketSent()
     }
 
     fun sendButton(buttonId: ButtonId, pressed: Boolean) {
@@ -334,7 +345,7 @@ class GamepadClient(
         buttonBuffer.put(buttonId.index.toByte())
         buttonBuffer.put(if (pressed) 1.toByte() else 0.toByte())
         webSocket?.send(buttonBuffer.array().toByteString())
-        trackPacketSent()
+        recordPacketSent()
     }
 
     fun sendStick(isLeft: Boolean, x: Float, y: Float) {
@@ -354,7 +365,7 @@ class GamepadClient(
         leftStickBuffer.putShort(x)
         leftStickBuffer.putShort(y)
         webSocket?.send(leftStickBuffer.array().toByteString())
-        trackPacketSent()
+        recordPacketSent()
     }
 
     fun sendRightStick(x: Short, y: Short) {
@@ -364,7 +375,7 @@ class GamepadClient(
         rightStickBuffer.putShort(x)
         rightStickBuffer.putShort(y)
         webSocket?.send(rightStickBuffer.array().toByteString())
-        trackPacketSent()
+        recordPacketSent()
     }
 
     fun sendMouse(dx: Short, dy: Short, buttons: Byte) {
@@ -383,7 +394,7 @@ class GamepadClient(
         mouseBuffer.putShort(dy)
         mouseBuffer.put(buttons)
         webSocket?.send(mouseBuffer.array().toByteString())
-        trackPacketSent()
+        recordPacketSent()
     }
 
     fun sendMedia(vkCode: Byte) {
@@ -396,7 +407,7 @@ class GamepadClient(
         mediaBuffer.put(Protocol.MEDIA)
         mediaBuffer.put(vkCode)
         webSocket?.send(mediaBuffer.array().toByteString())
-        trackPacketSent()
+        recordPacketSent()
     }
 
     fun sendPing() {
@@ -407,6 +418,15 @@ class GamepadClient(
         pingBuffer.put(Protocol.PING)
         pingBuffer.putInt(ts)
         webSocket?.send(pingBuffer.array().toByteString())
+    }
+
+    fun sendLatencyProbe(sequence: Int) {
+        if (!authenticated) return
+        latencyProbeBuffer.clear()
+        latencyProbeBuffer.put(Protocol.LATENCY_PROBE)
+        latencyProbeBuffer.putInt(sequence)
+        latencyProbeBuffer.putLong(System.nanoTime())
+        webSocket?.send(latencyProbeBuffer.array().toByteString())
     }
 
     fun sendKeepalive() {

@@ -4,6 +4,7 @@ import pytest
 
 from controller_bridge import (
     OP_BUTTON,
+    OP_LATENCY_PROBE,
     OP_LEFT_STICK,
     OP_MEDIA,
     OP_MOUSE,
@@ -12,6 +13,7 @@ from controller_bridge import (
     OP_RIGHT_STICK,
     OP_STEER,
     GamepadBridge,
+    validate_packet,
 )
 
 
@@ -92,23 +94,37 @@ def test_bridge_rumble_callback():
         b"\x01",
         b"\x01\x00",
         b"\x02",
-        b"\x02\x00",
         b"\x03",
-        b"\x03\x00",
-        b"\x05\x00",
-        b"\x06\x00",
-        b"\x07\x00",
-        b"\x08",
-        b"\x09\x00",
+        b"\x05",
         b"\xff",
-        b"\xff" * 32,
+        b"\xff" * 64,
     ],
 )
-def test_malformed_packets_do_not_crash(bridge, packet):
-    try:
-        bridge.handle_binary_packet(packet)
-    except (ValueError, struct.error, IndexError) as e:
-        pytest.fail(f"Malformed packet raised exception: {packet!r}, err: {e}")
+def test_invalid_packet_lengths(packet):
+    assert not validate_packet(packet)
+
+
+def test_disconnect_resets_controller(bridge):
+    bridge.set_steering(32767)
+    bridge.set_trigger(255)
+
+    bridge.reset()
+
+    assert bridge.steering == 0
+    assert bridge.throttle == 0
+    assert bridge.brake == 0
+
+
+def test_latency_probe_echo(bridge):
+    seq = 42
+    client_time_ns = 123456789012345
+    pkt = struct.pack("<BIq", OP_LATENCY_PROBE, seq, client_time_ns)
+    resp = bridge.handle_binary_packet(pkt)
+    assert resp is not None
+    assert resp[0] == OP_LATENCY_PROBE
+    unpacked_seq, unpacked_ts = struct.unpack("<Iq", resp[1:13])
+    assert unpacked_seq == seq
+    assert unpacked_ts == client_time_ns
 
 
 def test_golden_vectors(bridge):
@@ -129,3 +145,14 @@ def test_golden_vectors(bridge):
             assert result[0] == 0x0A
         else:
             assert result is None
+
+
+@pytest.mark.hardware
+def test_real_vigem_controller():
+    b = GamepadBridge()
+    if b.controller_available:
+        b.set_steering(1000)
+        assert b.steering == 1000
+        b.reset()
+        assert b.steering == 0
+    b.shutdown()

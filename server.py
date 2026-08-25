@@ -604,23 +604,27 @@ class GamepadServer:
             if was_phone:
                 self.bridge.reset()
 
+    async def check_heartbeats(self):
+        """Check client heartbeats and reset controller if a phone client goes silent."""
+        now = time.monotonic()
+        for ws in list(self.connected_clients):
+            info = self.client_infos.get(ws)
+            if not info or not info.get("confirmed") or info.get("is_desktop"):
+                continue
+            last = self.client_last_activity.get(ws, now)
+            if now - last > CLIENT_HEARTBEAT_TIMEOUT:
+                logger.warning("Client %s heartbeat timeout. Resetting controller.", info.get("ip", "?"))
+                self.bridge.reset()
+                try:
+                    await ws.close(code=4003, reason="Heartbeat timeout")
+                except Exception:
+                    pass
+
     async def _heartbeat_monitor(self):
         """Monitor client heartbeats and reset controller if a phone client goes silent."""
         while True:
             await asyncio.sleep(2.0)
-            now = time.monotonic()
-            for ws in list(self.connected_clients):
-                info = self.client_infos.get(ws)
-                if not info or not info.get("confirmed") or info.get("is_desktop"):
-                    continue
-                last = self.client_last_activity.get(ws, now)
-                if now - last > CLIENT_HEARTBEAT_TIMEOUT:
-                    logger.warning("Client %s heartbeat timeout. Resetting controller.", info.get("ip", "?"))
-                    self.bridge.reset()
-                    try:
-                        await ws.close(code=4003, reason="Heartbeat timeout")
-                    except Exception:
-                        pass
+            await self.check_heartbeats()
 
 
 async def main():
