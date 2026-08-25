@@ -137,7 +137,7 @@ def setup_tray():
 def start_webview():
     global main_window
     api = DesktopAPI()
-    url = f"http://127.0.0.1:{HTTP_PORT}?token={EXPECTED_TOKEN}"
+    url = f"http://127.0.0.1:{HTTP_PORT}/desktop.html?token={EXPECTED_TOKEN}"
 
     main_window = webview.create_window(
         title="PocketPad Host & Control Center",
