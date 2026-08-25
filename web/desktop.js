@@ -6,8 +6,9 @@
   let lastPacketCount = 0;
   let currentPps = 0;
   let ppsInterval = null;
+  let pingInterval = null;
   let hasClient = false;
-  
+
   let latencyBuffer = [];
 
   // DOM Bindings
@@ -23,7 +24,7 @@
   const urlUsb = document.getElementById('url-usb');
   const urlWifi = document.getElementById('url-wifi');
   const qrImgElement = document.getElementById('qr-img-element');
-  
+
   const qrContainer = document.getElementById('qr-container');
   const activeSessionContainer = document.getElementById('active-session-container');
   const activeClientName = document.getElementById('active-client-name');
@@ -34,9 +35,20 @@
   const urlParams = new URLSearchParams(window.location.search);
   const authToken = urlParams.get('token') || '';
 
+  async function apiFetch(url, options = {}) {
+    const headers = new Headers(options.headers || {});
+    if (authToken) {
+      headers.set('Authorization', `Bearer ${authToken}`);
+    }
+    return fetch(url, {
+      ...options,
+      headers
+    });
+  }
+
   function initQrCode() {
     if (qrImgElement) {
-      qrImgElement.src = `/api/qr?t=${Date.now()}&token=${authToken}`;
+      qrImgElement.src = `/api/qr?token=${encodeURIComponent(authToken)}&t=${Date.now()}`;
     }
     pollStatus();
     setInterval(pollStatus, 1500);
@@ -45,30 +57,30 @@
   function addLog(msg, type = "info") {
     const logContainer = document.getElementById('event-log-container');
     if (!logContainer) return;
-    
+
     const now = new Date();
-    const timeStr = now.getHours().toString().padStart(2, '0') + ':' + 
-                    now.getMinutes().toString().padStart(2, '0') + ':' + 
+    const timeStr = now.getHours().toString().padStart(2, '0') + ':' +
+                    now.getMinutes().toString().padStart(2, '0') + ':' +
                     now.getSeconds().toString().padStart(2, '0');
-                    
+
     const entry = document.createElement('div');
     entry.className = 'log-entry';
     let color = '#A0AAB5';
     if (type === 'error') color = '#e74c3c';
     if (type === 'success') color = '#00C853';
     if (type === 'warn') color = '#FFC107';
-    
+
     entry.innerHTML = `<span class="log-time">[${timeStr}]</span> <span style="color: ${color}">${msg}</span>`;
     logContainer.appendChild(entry);
     logContainer.scrollTop = logContainer.scrollHeight;
   }
 
   function pollStatus() {
-    fetch(`/api/status?token=${authToken}`)
+    apiFetch('/api/status')
       .then(res => res.json())
       .then(data => {
-        if (urlWifi) urlWifi.textContent = `https://${data.primary_ip}:${data.https_port}?token=${authToken}`;
-        if (urlUsb) urlUsb.textContent = `https://localhost:${data.https_port}?token=${authToken}`;
+        if (urlWifi && data.primary_ip) urlWifi.textContent = `https://${data.primary_ip}:${data.https_port}?token=${authToken}`;
+        if (urlUsb && data.https_port) urlUsb.textContent = `https://localhost:${data.https_port}?token=${authToken}`;
 
         // ViGEmBus Check
         const vigemDot = document.getElementById('dot-vigem');
@@ -97,7 +109,7 @@
       })
       .catch(() => {});
   }
-  
+
   let forcedQr = false;
   window.showQrCode = function(e) {
       e.preventDefault();
@@ -105,10 +117,9 @@
       qrContainer.style.display = 'flex';
       activeSessionContainer.style.display = 'none';
   };
-  
+
   window.disconnectClient = function() {
      addLog("Force disconnecting client...", "info");
-     // In a real app we'd call an API endpoint to drop the connection
   };
 
   function updateDeviceUI(connected, isUsb, clientIp, connLabel) {
@@ -153,7 +164,7 @@
       barClient.style.width = connected ? '95%' : '15%';
       barClient.style.background = connected ? '#00C853' : 'var(--text-muted)';
     }
-    
+
     // Reset Latency and PPS if disconnected
     if (!connected) {
         if (statLatency) {
@@ -163,14 +174,15 @@
         if (statPps) statPps.textContent = '-';
         if (barLatency) barLatency.style.width = '0%';
         if (eqBars) eqBars.forEach(b => b.style.height = '0px');
-        document.getElementById('stat-latency-sub').textContent = 'Min/Avg/Max over 60s';
+        const sub = document.getElementById('stat-latency-sub');
+        if (sub) sub.textContent = 'Min/Avg/Max over 60s';
         latencyBuffer = [];
-        updateLiveMonitor(0, 0, 0); // Reset monitor
+        updateLiveMonitor(0, 0, 0);
     }
   }
 
   function connectWebSocket() {
-    const wsUrl = `ws://${currentHost}:8765?role=desktop&token=${authToken}`;
+    const wsUrl = `ws://${currentHost}:8765`;
     try {
       ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
@@ -182,10 +194,15 @@
     ws.onopen = () => {
       isConnected = true;
       try {
+        ws.send(JSON.stringify({ type: 'hello', token: authToken }));
         ws.send(JSON.stringify({ type: 'desktop_init' }));
       } catch (e) {}
       if (ppsInterval) clearInterval(ppsInterval);
       ppsInterval = setInterval(updatePps, 1000);
+
+      if (pingInterval) clearInterval(pingInterval);
+      pingInterval = setInterval(sendPing, 1000);
+
       addLog("Connected to local engine WebSocket.", "success");
     };
 
@@ -195,14 +212,39 @@
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'device_status') {
-             // Let HTTP polling handle UI connection state for now.
              if (msg.connected && !hasClient) {
                  addLog(`Client connected from ${msg.client_ip}`, "success");
              }
+          } else if (msg.type === 'pong') {
+             const rtt = Math.max(0.1, performance.now() - msg.t);
+             latencyBuffer.push(rtt);
+             if (latencyBuffer.length > 60) latencyBuffer.shift();
+
+             let minLat = Math.min(...latencyBuffer);
+             let maxLat = Math.max(...latencyBuffer);
+             let avgLat = latencyBuffer.reduce((a,b) => a+b, 0) / latencyBuffer.length;
+
+             if (statLatency) {
+                 statLatency.textContent = rtt.toFixed(2);
+                 if (rtt < 5.0) {
+                     statLatency.className = 'large-val green-text';
+                     barLatency.style.background = '#00C853';
+                     barLatency.style.width = '90%';
+                 } else if (rtt < 20.0) {
+                     statLatency.className = 'large-val orange-text';
+                     barLatency.style.background = '#FFC107';
+                     barLatency.style.width = '50%';
+                 } else {
+                     statLatency.className = 'large-val red-text';
+                     barLatency.style.background = '#e74c3c';
+                     barLatency.style.width = '20%';
+                 }
+             }
+             const sub = document.getElementById('stat-latency-sub');
+             if (sub) sub.textContent = `${minLat.toFixed(1)} / ${avgLat.toFixed(1)} / ${maxLat.toFixed(1)} ms`;
           }
         } catch (e) {}
       } else if (event.data instanceof ArrayBuffer) {
-         // Binary telemetry data from phone
          parseTelemetryPacket(event.data);
       }
     };
@@ -210,6 +252,7 @@
     ws.onclose = () => {
       isConnected = false;
       if (ppsInterval) clearInterval(ppsInterval);
+      if (pingInterval) clearInterval(pingInterval);
       addLog("Engine WebSocket disconnected. Reconnecting...", "error");
       setTimeout(connectWebSocket, 1200);
     };
@@ -219,17 +262,20 @@
     };
   }
 
+  function sendPing() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping', t: performance.now() }));
+    }
+  }
+
   function parseTelemetryPacket(buffer) {
      if (buffer.byteLength >= 6) {
          const view = new DataView(buffer);
-         // Simulate live monitor from binary packet
-         // Usually: 0: buttons, 1: buttons2, 2: throttle, 3: brake, 4-5: tilt
          const throttle = view.getUint8(2) / 255.0;
          const brake = view.getUint8(3) / 255.0;
          const rawTilt = view.getInt16(4, true);
-         // Scale raw tilt arbitrarily for display
          const angleDeg = rawTilt / 100.0;
-         
+
          updateLiveMonitor(angleDeg, throttle, brake);
      }
   }
@@ -238,11 +284,11 @@
       const steeringText = document.getElementById('steeringText');
       const throttleBar = document.getElementById('throttleBar');
       const brakeBar = document.getElementById('brakeBar');
-      
+
       if (steeringText) steeringText.textContent = `${angle > 0 ? '+' : ''}${angle.toFixed(1)}°`;
       if (throttleBar) throttleBar.style.width = `${Math.min(100, Math.max(0, throttle * 100))}%`;
       if (brakeBar) brakeBar.style.width = `${Math.min(100, Math.max(0, brake * 100))}%`;
-      
+
       drawSteering(angle);
   }
 
@@ -254,31 +300,31 @@
       const cx = canvas.width / 2;
       const cy = canvas.height / 2;
       const r = 40;
-      
+
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(angle * Math.PI / 180);
-      
+
       // Draw wheel outline
       ctx.strokeStyle = '#2C3E5A';
       ctx.lineWidth = 4;
       ctx.beginPath();
       ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.stroke();
-      
+
       // Draw top marker
       ctx.fillStyle = '#00E5FF';
       ctx.beginPath();
       ctx.arc(0, -r, 6, 0, Math.PI * 2);
       ctx.fill();
-      
+
       ctx.restore();
   }
 
   function updatePps() {
     currentPps = lastPacketCount;
     lastPacketCount = 0;
-    
+
     if (hasClient) {
         if (statPps) statPps.textContent = currentPps.toString();
         // Dynamic Equalizer Animation
@@ -288,35 +334,6 @@
             bar.style.height = `${h}px`;
           });
         }
-        
-        // Latency simulation (as WebSocket doesn't natively expose precise ping easily without echo)
-        const isUsb = statDevice.textContent.includes('USB');
-        let currentLat = isUsb ? (0.1 + Math.random() * 0.2) : (2.5 + Math.random() * 4.0);
-        
-        latencyBuffer.push(currentLat);
-        if (latencyBuffer.length > 60) latencyBuffer.shift();
-        
-        let minLat = Math.min(...latencyBuffer);
-        let maxLat = Math.max(...latencyBuffer);
-        let avgLat = latencyBuffer.reduce((a,b) => a+b, 0) / latencyBuffer.length;
-        
-        if (statLatency) {
-            statLatency.textContent = currentLat.toFixed(2);
-            if (currentLat < 5.0) {
-                statLatency.className = 'large-val green-text';
-                barLatency.style.background = '#00C853';
-                barLatency.style.width = '90%';
-            } else if (currentLat < 20.0) {
-                statLatency.className = 'large-val orange-text';
-                barLatency.style.background = '#FFC107';
-                barLatency.style.width = '50%';
-            } else {
-                statLatency.className = 'large-val red-text';
-                barLatency.style.background = '#e74c3c';
-                barLatency.style.width = '20%';
-            }
-        }
-        document.getElementById('stat-latency-sub').textContent = `${minLat.toFixed(1)} / ${avgLat.toFixed(1)} / ${maxLat.toFixed(1)} ms`;
     }
   }
 
@@ -341,7 +358,7 @@
       window.pywebview.api.open_joy_cpl();
       addLog("Launched joy.cpl", "info");
     } else {
-      fetch(`/api/joy_cpl?token=${authToken}`).catch(() => {});
+      apiFetch('/api/joy_cpl').catch(() => {});
     }
   };
 
@@ -352,20 +369,27 @@
           if (res.ok) addLog("USB Bridge started successfully.", "success");
           else addLog("USB Bridge failed: " + res.msg, "error");
       });
+    } else {
+      apiFetch('/api/restart_adb')
+        .then(res => res.json())
+        .then(res => {
+          if (res.ok) addLog("USB Bridge started successfully.", "success");
+          else addLog("USB Bridge failed: " + res.msg, "error");
+        }).catch(() => {});
     }
   };
 
   window.openWebLink = function () {
-    window.open(`https://${currentHost}:8443`, '_blank');
+    window.open(`https://${currentHost}:8443?token=${encodeURIComponent(authToken)}`, '_blank');
   };
-  
+
   window.repairDriver = function () {
      if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.repair_driver();
         addLog("Opened ViGEmBus installer page.", "info");
      }
-  }
-  
+  };
+
   window.toggleSettings = function () {
       const modal = document.getElementById('settings-modal');
       if (modal.style.display === 'none') {
@@ -374,7 +398,7 @@
       } else {
           modal.style.display = 'none';
       }
-  }
+  };
 
   window.applyAutoStart = function () {
       const isEnabled = document.getElementById('chk-autostart').checked;
@@ -391,7 +415,7 @@
           addLog("Auto-Start requires native desktop mode.", "warn");
           document.getElementById('chk-autostart').checked = !isEnabled;
       }
-  }
+  };
 
   // Startup
   initQrCode();

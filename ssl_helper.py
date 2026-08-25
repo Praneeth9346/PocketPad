@@ -1,7 +1,9 @@
 import datetime
 import ipaddress
+import os
 import socket
 import ssl
+import stat
 import sys
 from pathlib import Path
 
@@ -20,17 +22,27 @@ BASE_DIR = get_base_dir()
 CERT_FILE = BASE_DIR / "cert.pem"
 KEY_FILE = BASE_DIR / "key.pem"
 
+
+def secure_file(path: Path):
+    """Restrict file permissions to current user only."""
+    try:
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+
+
 def get_all_local_ips():
     """Discover all local network and USB interface IP addresses."""
     ips = {"127.0.0.1"}
     try:
         host_ips = socket.gethostbyname_ex(socket.gethostname())[2]
         for ip in host_ips:
-            if not ip.startswith("169.254"): # ignore APIPA
+            if not ip.startswith("169.254"):  # ignore APIPA
                 ips.add(ip)
     except Exception:
         pass
     return list(ips)
+
 
 def generate_self_signed_cert(local_ip: str = "127.0.0.1"):
     """Generate self-signed certificate supporting all local and USB network IPs."""
@@ -38,7 +50,6 @@ def generate_self_signed_cert(local_ip: str = "127.0.0.1"):
     if local_ip not in all_ips and not local_ip.startswith("169.254"):
         all_ips.append(local_ip)
 
-    print("[SSL] Generating multi-interface SSL certificate (Wi-Fi & USB)...")
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
     subject = issuer = x509.Name([
@@ -72,15 +83,21 @@ def generate_self_signed_cert(local_ip: str = "127.0.0.1"):
             format=serialization.PrivateFormat.TraditionalOpenSSL,
             encryption_algorithm=serialization.NoEncryption()
         ))
+    secure_file(KEY_FILE)
 
     with open(CERT_FILE, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
+    secure_file(CERT_FILE)
 
-    print(f"[SSL] Certificate created covering: {all_ips}")
     return str(CERT_FILE), str(KEY_FILE)
 
+
 def get_ssl_context(local_ip: str = "127.0.0.1"):
-    cert_path, key_path = generate_self_signed_cert(local_ip)
+    """Get or generate a stable TLS 1.2+ SSL context."""
+    if not CERT_FILE.exists() or not KEY_FILE.exists():
+        generate_self_signed_cert(local_ip)
+
     ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+    ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ssl_ctx.load_cert_chain(certfile=str(CERT_FILE), keyfile=str(KEY_FILE))
     return ssl_ctx

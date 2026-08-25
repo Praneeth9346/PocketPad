@@ -13,13 +13,13 @@ import com.aistudio.pocketpad.model.ButtonId
 import com.aistudio.pocketpad.model.ConnectionState
 import com.aistudio.pocketpad.model.PadMode
 import com.aistudio.pocketpad.model.PedalMode
-import com.aistudio.pocketpad.model.PocketPadConnection
 import com.aistudio.pocketpad.model.PocketPadSettings
 import com.aistudio.pocketpad.model.SpeedUnit
 import com.aistudio.pocketpad.model.TelemetryData
 import com.aistudio.pocketpad.model.parsePocketPadUrl
 import com.aistudio.pocketpad.network.GamepadClient
 import com.aistudio.pocketpad.sensor.MotionSensorManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -91,18 +91,25 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
 
     private var isIntentionalDisconnect = false
     private var reconnectJob: Job? = null
+    private var retryDelayMs = 1000L
 
     private val client = GamepadClient(
         onConnectionStateChanged = { state ->
-            handleConnectionState(state)
+            viewModelScope.launch(Dispatchers.Main) {
+                handleConnectionState(state)
+            }
         },
         onPingMeasured = { rtt ->
-            _pingMs.value = rtt
+            viewModelScope.launch(Dispatchers.Main) {
+                _pingMs.value = rtt
+            }
         },
         onTelemetryReceived = { telem ->
-            if (!_isDemoMode.value) {
-                _telemetry.value = telem
-                lastTelemetryTime = System.currentTimeMillis()
+            viewModelScope.launch(Dispatchers.Main) {
+                if (!_isDemoMode.value) {
+                    _telemetry.value = telem
+                    lastTelemetryTime = System.currentTimeMillis()
+                }
             }
         },
         onRumbleReceived = { large, small ->
@@ -136,6 +143,7 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private var pingJob: Job? = null
+    private var heartbeatJob: Job? = null
     private var demoSimulationJob: Job? = null
     private var telemetryTimeoutJob: Job? = null
     private var fpsMouseJob: Job? = null
@@ -146,14 +154,14 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         loadSettings()
-        // Apply default settings to motion manager
         syncSettingsToSensor()
         startTelemetryTimeoutMonitor()
+        startHeartbeatLoop()
     }
 
     private fun handleConnectionState(state: ConnectionState) {
         _connectionState.value = state
-        if (state == ConnectionState.DISCONNECTED) {
+        if (state == ConnectionState.DISCONNECTED || state == ConnectionState.ERROR) {
             _pingMs.value = null
             if (!isIntentionalDisconnect && _settings.value.serverIp.isNotEmpty()) {
                 startAutoReconnect()
@@ -161,19 +169,32 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
         } else if (state == ConnectionState.CONNECTED_WIFI || state == ConnectionState.CONNECTED_USB) {
             reconnectJob?.cancel()
             reconnectJob = null
+            retryDelayMs = 1000L
         }
     }
 
     private fun startAutoReconnect() {
         if (reconnectJob?.isActive == true) return
         reconnectJob = viewModelScope.launch {
-            var delayMs = 1000L
-            while (isActive && !isIntentionalDisconnect && _connectionState.value == ConnectionState.DISCONNECTED) {
-                delay(delayMs)
+            while (isActive && !isIntentionalDisconnect &&
+                   (_connectionState.value == ConnectionState.DISCONNECTED || _connectionState.value == ConnectionState.ERROR)) {
+                delay(retryDelayMs)
                 if (isActive && !isIntentionalDisconnect) {
                     val s = _settings.value
                     client.connect(s.serverIp, s.serverPort, s.authToken)
-                    delayMs = min(delayMs * 2, 8000L) // exponential backoff up to 8s
+                    retryDelayMs = min(retryDelayMs * 2, 15000L) // exponential backoff up to 15s
+                }
+            }
+        }
+    }
+
+    private fun startHeartbeatLoop() {
+        heartbeatJob?.cancel()
+        heartbeatJob = viewModelScope.launch {
+            while (isActive) {
+                delay(2000)
+                if (client.isConnected) {
+                    client.sendKeepalive()
                 }
             }
         }
@@ -239,7 +260,7 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
         } else {
             motionManager.stop()
         }
-        
+
         if (screen == AppScreen.FPS_MOUSE) {
             _padMode.value = PadMode.FPS_MOUSE
             startFPSMouseLoop()
@@ -379,7 +400,7 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
     fun pressButton(button: ButtonId) {
         val newButtons = _activeButtons.value + button
         _activeButtons.value = newButtons
-        
+
         if (_padMode.value == PadMode.FPS_MOUSE && (button == ButtonId.RB || button == ButtonId.LB)) {
             client.sendMouse(0, 0, getFPSMouseButtons(newButtons))
         } else {
@@ -395,7 +416,7 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
     fun releaseButton(button: ButtonId) {
         val newButtons = _activeButtons.value - button
         _activeButtons.value = newButtons
-        
+
         if (_padMode.value == PadMode.FPS_MOUSE && (button == ButtonId.RB || button == ButtonId.LB)) {
             client.sendMouse(0, 0, getFPSMouseButtons(newButtons))
         } else {
@@ -445,7 +466,6 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
             var simSlip = 5
 
             while (isActive && _isDemoMode.value) {
-                // If user is holding throttle or brake, reactively drive the simulation
                 val t = _throttle.value
                 val b = _brake.value
 
@@ -472,7 +492,6 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
                         triggerHaptic(15)
                     }
                 } else {
-                    // Natural cruising oscillation
                     simSpeed = max(20f, simSpeed - 0.2f)
                     simRpm = (simRpm + (-30..30).random()).coerceIn(2800, 7200)
                     simBoost = max(2f, simBoost - 0.1f)
@@ -508,15 +527,15 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
     private fun handleDemoButtonPress(button: ButtonId) {
         val current = _telemetry.value
         when (button) {
-            ButtonId.B -> { // Shift UP
+            ButtonId.B -> {
                 val nextGear = min(7, current.gear + 1)
                 _telemetry.update { it.copy(gear = nextGear, currentRpm = max(3000, it.currentRpm - 2000)) }
             }
-            ButtonId.X -> { // Shift DOWN
+            ButtonId.X -> {
                 val prevGear = max(1, current.gear - 1)
                 _telemetry.update { it.copy(gear = prevGear, currentRpm = min(8200, it.currentRpm + 2200)) }
             }
-            ButtonId.A -> { // E-Brake Drift
+            ButtonId.A -> {
                 _telemetry.update { it.copy(slipPct = 88, isDrifting = true) }
             }
             else -> {}
@@ -543,11 +562,9 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
             return
         }
 
-        // Fallback for manual IP & Port entry
         var rawInput = ip.trim()
         var extractedToken = token.trim()
 
-        // Extract token from query parameter if present (e.g. from QR scan: https://192.168.1.5:8443?token=xyz)
         if (rawInput.contains("token=")) {
             val tokenPart = rawInput.substringAfter("token=").substringBefore("&").substringBefore("#")
             if (tokenPart.isNotEmpty()) {
@@ -599,7 +616,6 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
             while (isActive) {
                 if (client.isConnected) {
                     client.sendPing()
-                    client.sendKeepalive()
                 }
                 delay(1000)
             }
@@ -669,6 +685,7 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
         motionManager.stop()
         client.disconnect()
         pingJob?.cancel()
+        heartbeatJob?.cancel()
         reconnectJob?.cancel()
         demoSimulationJob?.cancel()
         telemetryTimeoutJob?.cancel()

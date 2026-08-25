@@ -190,8 +190,10 @@ fun TopBar(
             // Connection Pill
             val (connIcon, connLabel) = when (connectionState) {
                 ConnectionState.CONNECTED_USB -> Pair("⚡", "USB")
-                ConnectionState.CONNECTED_WIFI -> Pair("📶", "Wi-Fi") // simplified label
+                ConnectionState.CONNECTED_WIFI -> Pair("📶", "Wi-Fi")
                 ConnectionState.CONNECTING -> Pair("◌", "Connecting...")
+                ConnectionState.AUTHENTICATING -> Pair("🔒", "Authenticating...")
+                ConnectionState.ERROR -> Pair("✕", "Auth Error")
                 ConnectionState.DISCONNECTED -> Pair("📶", "Disconnected")
             }
 

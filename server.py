@@ -1,33 +1,18 @@
 import asyncio
+import atexit
 import io
 import json
 import logging
 import os
+import secrets
 import socket
+import ssl
 import subprocess
 import sys
 import threading
 import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-
-if sys.platform == "win32":
-    if sys.stdout is None:
-        sys.stdout = open(os.devnull, "w", encoding='utf-8')
-    if sys.stderr is None:
-        sys.stderr = open(os.devnull, "w", encoding='utf-8')
-    try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
-    except Exception:
-        pass
-
-# Structured logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(levelname)s] %(name)s: %(message)s'
-)
-logger = logging.getLogger("PocketPad")
 
 import qrcode
 import websockets
@@ -36,13 +21,30 @@ from controller_bridge import GamepadBridge
 from ssl_helper import get_all_local_ips, get_ssl_context
 from usb_setup import setup_usb_reverse_forwarding
 
-HTTP_PORT = 8000
-HTTPS_PORT = 8443
-WS_PORT = 8765
-WSS_PORT = 8766
-CLIENT_HEARTBEAT_TIMEOUT = 8.0  # seconds without any packet → reset controller
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S"
+)
+logger = logging.getLogger("PocketPad")
 
-import secrets
+# Configurable Network & Protocol Constants
+BIND_HOST = os.environ.get("POCKETPAD_BIND_HOST", "0.0.0.0")
+HTTP_PORT = int(os.environ.get("POCKETPAD_HTTP_PORT", "8000"))
+HTTPS_PORT = int(os.environ.get("POCKETPAD_HTTPS_PORT", "8443"))
+WS_PORT = int(os.environ.get("POCKETPAD_WS_PORT", "8765"))
+WSS_PORT = int(os.environ.get("POCKETPAD_WSS_PORT", "8766"))
+PROTOCOL_VERSION = 1
+CLIENT_HEARTBEAT_TIMEOUT = 8.0  # seconds without any packet → reset controller
+MAX_WS_MESSAGE_SIZE = 64 * 1024  # 64 KB
+
+ALLOWED_CORS_ORIGINS = {
+    "http://localhost",
+    "http://127.0.0.1",
+    "https://localhost",
+    "https://127.0.0.1",
+}
+
 
 def get_base_dir() -> Path:
     if getattr(sys, 'frozen', False):
@@ -52,38 +54,72 @@ def get_base_dir() -> Path:
 BASE_DIR = get_base_dir()
 TOKEN_FILE = BASE_DIR / ".pocketpad_token"
 
+
+def write_token_securely(token: str):
+    """Write authentication token to disk with restricted permissions."""
+    TOKEN_FILE.write_text(token, encoding="utf-8")
+    try:
+        os.chmod(TOKEN_FILE, 0o600)
+    except OSError:
+        pass
+
+
 def get_or_create_token() -> str:
     """Auto-generate persistent token on first run."""
     env_token = os.environ.get("POCKETPAD_TOKEN", "")
     if env_token:
         return env_token
-    
+
     try:
         if TOKEN_FILE.exists():
-            stored = TOKEN_FILE.read_text().strip()
+            stored = TOKEN_FILE.read_text(encoding="utf-8").strip()
             if stored:
                 return stored
     except Exception:
         pass
-    
-    token = secrets.token_urlsafe(24)
+
+    token = secrets.token_urlsafe(32)
     try:
-        TOKEN_FILE.write_text(token)
-        print(f"[Auth] Generated new token: {token}")
-        print(f"[Auth] Saved to {TOKEN_FILE}")
+        write_token_securely(token)
+        logger.info("[Auth] Generated new authentication token.")
+        logger.info("[Auth] Token saved to secure local storage.")
     except Exception:
         pass
     return token
 
+
 EXPECTED_TOKEN = get_or_create_token()
+
+
+def rotate_token() -> str:
+    """Rotate security token programmatically."""
+    global EXPECTED_TOKEN
+    token = secrets.token_urlsafe(32)
+    write_token_securely(token)
+    EXPECTED_TOKEN = token
+    logger.info("[Auth] Authentication token rotated successfully.")
+    return token
+
 
 def _token_matches(candidate) -> bool:
     if not isinstance(candidate, str):
         return False
     return secrets.compare_digest(candidate, EXPECTED_TOKEN)
 
+
 # Global server instance reference for REST API
 GLOBAL_SERVER = None
+
+
+@atexit.register
+def emergency_reset():
+    """Crash-safe emergency controller reset on process termination."""
+    try:
+        if GLOBAL_SERVER and GLOBAL_SERVER.bridge:
+            GLOBAL_SERVER.bridge.reset()
+    except Exception:
+        pass
+
 
 def get_web_dir() -> Path:
     if getattr(sys, 'frozen', False):
@@ -99,6 +135,7 @@ def get_web_dir() -> Path:
 
 WEB_DIR = get_web_dir()
 
+
 def get_primary_ip():
     """Detect primary LAN or USB IP address."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -111,85 +148,144 @@ def get_primary_ip():
         s.close()
     return ip
 
+
+def send_security_headers(handler: SimpleHTTPRequestHandler):
+    """Inject standard security response headers."""
+    handler.send_header("X-Content-Type-Options", "nosniff")
+    handler.send_header("X-Frame-Options", "DENY")
+    handler.send_header("Referrer-Policy", "no-referrer")
+    handler.send_header("Cache-Control", "no-store")
+
+
+def require_auth(handler: SimpleHTTPRequestHandler) -> bool:
+    """Validate Bearer token or URL token; send 401 if unauthorized."""
+    if handler._authorized():
+        return True
+
+    handler.send_response(401)
+    send_security_headers(handler)
+    handler.send_header("Content-Type", "application/json")
+    handler.end_headers()
+    handler.wfile.write(b'{"error":"unauthorized"}')
+    return False
+
+
 class CustomHTTPHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
     def _authorized(self) -> bool:
-        # Check Authorization header
+        # Check Authorization header (preferred)
         auth = self.headers.get("Authorization", "")
-        if auth.startswith("Bearer ") and _token_matches(auth[7:]):
+        if auth.startswith("Bearer ") and _token_matches(auth[7:].strip()):
             return True
-        
-        # Check query string
+
+        # Check query string (for QR bootstrap only)
         if "?" in self.path:
             query = self.path.split("?", 1)[1]
             for param in query.split("&"):
-                if param.startswith("token=") and _token_matches(param[6:]):
+                if param.startswith("token=") and _token_matches(param[6:].strip()):
                     return True
         return False
-    
-    def do_GET(self):
-        # Enforce auth on all API endpoints except /api/status (needed for polling)
-        if self.path.startswith("/api/") and self.path != "/api/status":
-            if not self._authorized():
-                self.send_response(401)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(b'{"error":"unauthorized"}')
-                return
 
+    def do_GET(self):
+        # 1. Status API (Sanitized for unauthenticated, full for authenticated)
         if self.path.startswith("/api/status"):
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
+            is_auth = self._authorized()
             active_clients = []
             if GLOBAL_SERVER:
                 for c_info in GLOBAL_SERVER.client_infos.values():
                     if c_info.get("confirmed", False) and not c_info.get("is_desktop", False):
-                        active_clients.append(c_info)
+                        if is_auth:
+                            active_clients.append(c_info)
+                        else:
+                            active_clients.append({"label": c_info.get("label", "Client")})
 
-            data = {
-                "primary_ip": get_primary_ip(),
-                "all_ips": get_all_local_ips(),
-                "https_port": HTTPS_PORT,
-                "http_port": HTTP_PORT,
-                "ws_port": WS_PORT,
-                "connected_count": len(active_clients),
-                "clients": active_clients,
-                "controller_available": GLOBAL_SERVER.bridge.controller_available if GLOBAL_SERVER else False,
-                "controller_error": GLOBAL_SERVER.bridge.controller_error if GLOBAL_SERVER else "Server not started",
-                "auth_required": bool(EXPECTED_TOKEN)
-            }
+            self.send_response(200)
+            send_security_headers(self)
+            self.send_header("Content-Type", "application/json")
+
+            origin = self.headers.get("Origin", "")
+            if any(origin.startswith(allowed) for allowed in ALLOWED_CORS_ORIGINS):
+                self.send_header("Access-Control-Allow-Origin", origin)
+
+            self.end_headers()
+
+            if is_auth:
+                data = {
+                    "primary_ip": get_primary_ip(),
+                    "all_ips": get_all_local_ips(),
+                    "https_port": HTTPS_PORT,
+                    "http_port": HTTP_PORT,
+                    "ws_port": WS_PORT,
+                    "wss_port": WSS_PORT,
+                    "connected_count": len(active_clients),
+                    "clients": active_clients,
+                    "controller_available": GLOBAL_SERVER.bridge.controller_available if GLOBAL_SERVER else False,
+                    "controller_error": GLOBAL_SERVER.bridge.controller_error if GLOBAL_SERVER else "Server not started",
+                    "auth_required": bool(EXPECTED_TOKEN),
+                    "protocol_version": PROTOCOL_VERSION
+                }
+            else:
+                data = {
+                    "connected_count": len(active_clients),
+                    "controller_available": GLOBAL_SERVER.bridge.controller_available if GLOBAL_SERVER else False,
+                    "auth_required": True,
+                    "protocol_version": PROTOCOL_VERSION
+                }
+
             self.wfile.write(json.dumps(data).encode('utf-8'))
             return
 
+        # 2. Joystick Control Panel API (Protected)
         elif self.path.startswith("/api/joy_cpl"):
+            if not require_auth(self):
+                return
             try:
                 subprocess.Popen(["control", "joy.cpl"])
                 res = {"ok": True}
             except Exception as e:
                 res = {"ok": False, "error": str(e)}
             self.send_response(200)
+            send_security_headers(self)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(res).encode('utf-8'))
             return
 
+        # 3. Restart ADB Reverse Port Forwarding API (Protected)
         elif self.path.startswith("/api/restart_adb"):
+            if not require_auth(self):
+                return
             try:
                 adb_ok, adb_msg = setup_usb_reverse_forwarding()
                 res = {"ok": adb_ok, "msg": adb_msg}
             except Exception as e:
                 res = {"ok": False, "msg": str(e)}
             self.send_response(200)
+            send_security_headers(self)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(res).encode('utf-8'))
             return
 
+        # 4. Token Rotation API (Protected)
+        elif self.path.startswith("/api/rotate_token"):
+            if not require_auth(self):
+                return
+            new_token = rotate_token()
+            res = {"ok": True, "token": new_token}
+            self.send_response(200)
+            send_security_headers(self)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode('utf-8'))
+            return
+
+        # 5. Connection QR Code Image (Protected)
         elif self.path.startswith("/api/qr"):
+            if not require_auth(self):
+                return
             primary_ip = get_primary_ip()
             qr_url = f"https://{primary_ip}:{HTTPS_PORT}?token={EXPECTED_TOKEN}"
             qr = qrcode.QRCode(border=1)
@@ -201,50 +297,54 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
             png_bytes = buf.getvalue()
 
             self.send_response(200)
+            send_security_headers(self)
             self.send_header("Content-Type", "image/png")
-            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             self.wfile.write(png_bytes)
             return
 
+        # 6. Static Web Assets
         super().do_GET()
 
     def log_message(self, format, *args):
         pass
 
+
 def run_http_server():
     """Run standard HTTP server on port 8000."""
     try:
-        server = HTTPServer(('0.0.0.0', HTTP_PORT), CustomHTTPHandler)
+        server = HTTPServer((BIND_HOST, HTTP_PORT), CustomHTTPHandler)
         server.serve_forever()
     except Exception as e:
-        print(f"[HTTP] Server error: {e}")
+        logger.error(f"[HTTP] Server error: {e}")
+
 
 def run_https_server(ssl_ctx):
     """Run secure HTTPS server on port 8443."""
     try:
-        server = HTTPServer(('0.0.0.0', HTTPS_PORT), CustomHTTPHandler)
+        server = HTTPServer((BIND_HOST, HTTPS_PORT), CustomHTTPHandler)
         server.socket = ssl_ctx.wrap_socket(server.socket, server_side=True)
         server.serve_forever()
     except Exception as e:
-        print(f"[HTTPS] Server error: {e}")
+        logger.error(f"[HTTPS] Server error: {e}")
+
 
 def print_banner(primary_ip: str, all_ips: list, usb_status: str, adb_active: bool):
     """Print ASCII QR Code and direct connection links."""
     https_primary = f"https://{primary_ip}:{HTTPS_PORT}"
-    
+
     print("\n" + "=" * 68)
     print("   🏎️  POCKETPAD - NATIVE C-SPEED FORZA RACING SERVER 🎮")
     print("=" * 68)
 
-    print("\n[ ⚡ METHOD B: USB CABLE DIRECT 0.2ms MODE (RECOMMENDED) ]")
+    print("\n[ ⚡ METHOD B: USB CABLE DIRECT MODE (RECOMMENDED) ]")
     if adb_active:
         print("  ★ ADB Reverse USB Forwarding: ACTIVE!")
         print(f"  👉 Open on phone:  https://localhost:{HTTPS_PORT}  (or http://localhost:{HTTP_PORT})")
     else:
         print(f"  ★ USB Status: {usb_status}")
 
-    print("\n[ 📶 METHOD A: WIRELESS 5GHz WI-FI MODE (WMM QoS AC_VO) ]")
+    print("\n[ 📶 METHOD A: WIRELESS 5GHz WI-FI MODE (WMM QoS) ]")
     for ip in all_ips:
         if ip != "127.0.0.1":
             print(f"  👉 Wi-Fi URL:                               https://{ip}:{HTTPS_PORT}")
@@ -263,6 +363,7 @@ def print_banner(primary_ip: str, all_ips: list, usb_status: str, adb_active: bo
     print("=" * 68)
     print("⚡ C-SPEED BINARY PROTOCOL + WMM VOICE QoS (AC_VO) RUNNING\n")
 
+
 class GamepadServer:
     def __init__(self):
         global GLOBAL_SERVER
@@ -270,6 +371,7 @@ class GamepadServer:
         self.connected_clients = set()
         self.client_infos = {}
         self.client_last_activity = {}
+        self.auth_failures = {}
         self.loop = None
         self.heartbeat_task = None
         GLOBAL_SERVER = self
@@ -278,7 +380,7 @@ class GamepadServer:
         """Push binary rumble event to all active mobile clients."""
         if not self.connected_clients or not self.loop or not self.loop.is_running():
             return
-            
+
         packet = bytes([0x0B, large_motor, small_motor])
         self.loop.call_soon_threadsafe(self._do_broadcast_rumble, packet)
 
@@ -303,19 +405,42 @@ class GamepadServer:
             "connected": bool(latest_phone),
             "client_ip": latest_phone["ip"] if latest_phone else "",
             "is_usb": latest_phone["is_usb"] if latest_phone else False,
-            "conn_label": latest_phone["label"] if latest_phone else "Standby",
-            "count": len(phone_clients)
+            "label": latest_phone["label"] if latest_phone else "Disconnected",
+            "phone_count": len(phone_clients)
         })
 
-        try:
-            websockets.broadcast(self.connected_clients, msg)
-        except Exception:
-            pass
+        desktop_clients = [ws for ws, info in self.client_infos.items() if info.get("is_desktop", False)]
+        for ws in desktop_clients:
+            try:
+                self.loop.create_task(ws.send(msg))
+            except Exception:
+                pass
+
+    async def shutdown(self):
+        """Gracefully terminate background tasks and close active client sockets."""
+        if self.heartbeat_task:
+            self.heartbeat_task.cancel()
+
+        for ws in list(self.connected_clients):
+            try:
+                await ws.close(code=1001, reason="Server shutting down")
+            except Exception:
+                pass
+
+        self.bridge.reset()
 
     async def handle_client(self, websocket):
+        """Handle incoming WebSocket connections."""
         client_address = websocket.remote_address
+        client_ip = client_address[0] if client_address else "unknown"
 
-        # === TOKEN AUTHENTICATION HANDSHAKE ===
+        # 1. Rate-limit brute-force attempts per IP
+        if self.auth_failures.get(client_ip, 0) >= 10:
+            logger.warning("Auth blocked: too many failed attempts from %s", client_ip)
+            await websocket.close(code=4003, reason="Too many auth failures")
+            return
+
+        # 2. Enforce Authentication Handshake via first message
         if EXPECTED_TOKEN:
             try:
                 raw = await asyncio.wait_for(websocket.recv(), timeout=5.0)
@@ -330,39 +455,43 @@ class GamepadServer:
                     return
 
                 if not _token_matches(hello.get("token", "")):
-                    logger.warning(f"Auth rejected from {client_address}: invalid token")
+                    self.auth_failures[client_ip] = self.auth_failures.get(client_ip, 0) + 1
+                    logger.warning("Authentication rejected from %s: invalid token", client_ip)
                     await websocket.close(code=4001, reason="Invalid token")
                     return
 
-                # Send hello_ack
+                # Auth succeeded, reset failure count
+                self.auth_failures.pop(client_ip, None)
+
+                # Send hello_ack with protocol version
                 await websocket.send(json.dumps({
                     "type": "hello_ack",
-                    "version": 1,
+                    "version": PROTOCOL_VERSION,
                     "server": "PocketPad",
                     "controller_available": self.bridge.controller_available
                 }))
-                logger.info(f"Client {client_address} authenticated successfully")
+                logger.info("Client authenticated successfully from %s", client_ip)
 
             except TimeoutError:
                 await websocket.close(code=4002, reason="Handshake timeout")
                 return
             except Exception as e:
-                logger.warning(f"Handshake error from {client_address}: {e}")
+                logger.warning("Handshake error from %s: %s", client_ip, e)
                 await websocket.close(code=4002, reason="Handshake failed")
                 return
 
-        # Start as pending — don't classify or broadcast until identity is confirmed
+        # 3. Connection State Registration
         self.connected_clients.add(websocket)
         self.client_infos[websocket] = {
-            "ip": client_address[0],
+            "ip": client_ip,
             "is_usb": False,
             "label": "Pending",
             "is_desktop": False,
-            "confirmed": False  # Not yet identified as phone or desktop
+            "confirmed": False
         }
         self.client_last_activity[websocket] = time.monotonic()
 
-        # Apply High-Priority Kernel Socket Options (TCP_NODELAY + IP_TOS 0xB8 Voice QoS + Anti-Bufferbloat)
+        # High-Priority Kernel Socket Options (TCP_NODELAY + IP_TOS 0xB8 Voice QoS + Anti-Bufferbloat)
         try:
             sock = websocket.transport.get_extra_info('socket')
             if sock:
@@ -370,7 +499,7 @@ class GamepadServer:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
                 try:
-                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, 0xB8) # DSCP EF (WMM Voice Priority AC_VO)
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, 0xB8)  # DSCP EF (WMM Voice Priority AC_VO)
                 except Exception:
                     pass
         except Exception:
@@ -380,23 +509,19 @@ class GamepadServer:
             """Upgrade a pending connection to a confirmed phone client."""
             info = self.client_infos.get(websocket)
             if info and not info["confirmed"]:
-                # ADB reverse connections arrive from loopback ONLY
-                is_usb = client_address[0] in ("127.0.0.1", "::1")
+                is_usb = client_ip in ("127.0.0.1", "::1")
                 info["is_usb"] = is_usb
-                info["label"] = "USB Wired (0.2ms)" if is_usb else "Wireless Wi-Fi (WMM QoS)"
+                info["label"] = "USB Wired" if is_usb else "Wireless Wi-Fi (WMM QoS)"
                 info["confirmed"] = True
-                print(f"[+] Phone Gamepad Connected: {info['label']} from {client_address}")
+                logger.info("Phone Gamepad Connected: %s from %s", info['label'], client_ip)
                 self.broadcast_device_status()
 
         try:
             async for message in websocket:
                 # FAST PATH: Binary Packet (< 0.0001 ms)
                 if isinstance(message, bytes):
-                    # First binary packet confirms this is a phone gamepad
                     confirm_as_phone()
                     self.client_last_activity[websocket] = time.monotonic()
-
-
 
                     resp = self.bridge.handle_binary_packet(message)
                     if resp:
@@ -416,7 +541,6 @@ class GamepadServer:
                         self.broadcast_device_status()
                         continue
 
-                    # Any other JSON message from phone confirms it as a phone
                     confirm_as_phone()
                     self.client_last_activity[websocket] = time.monotonic()
 
@@ -448,23 +572,21 @@ class GamepadServer:
                             elif side == "RIGHT":
                                 self.bridge.handle_right_joystick(float(x), float(y))
 
-
-
                     elif msg_type == "ping":
                         t = data.get("t", 0)
                         await websocket.send(json.dumps({"type": "pong", "t": t}))
 
                 except json.JSONDecodeError:
-                    logger.debug(f"Invalid JSON from {client_address}")
+                    logger.debug("Invalid JSON from %s", client_ip)
                 except Exception as parse_err:
-                    logger.warning(f"Error processing packet from {client_address}: {parse_err}")
+                    logger.warning("Error processing packet from %s: %s", client_ip, parse_err)
 
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
             was_phone = self.client_infos.get(websocket, {}).get("confirmed", False) and not self.client_infos.get(websocket, {}).get("is_desktop", False)
             if was_phone:
-                logger.info(f"Phone {client_address} disconnected. Resetting controller inputs.")
+                logger.info("Phone %s disconnected. Resetting controller inputs.", client_ip)
             self.connected_clients.discard(websocket)
             self.client_infos.pop(websocket, None)
             self.client_last_activity.pop(websocket, None)
@@ -483,12 +605,13 @@ class GamepadServer:
                     continue
                 last = self.client_last_activity.get(ws, now)
                 if now - last > CLIENT_HEARTBEAT_TIMEOUT:
-                    logger.warning(f"Client {info.get('ip', '?')} heartbeat timeout. Resetting controller.")
+                    logger.warning("Client %s heartbeat timeout. Resetting controller.", info.get('ip', '?'))
                     self.bridge.reset()
                     try:
                         await ws.close(code=4003, reason="Heartbeat timeout")
                     except Exception:
                         pass
+
 
 async def main():
     loop = asyncio.get_running_loop()
@@ -519,28 +642,29 @@ async def main():
     # 5. Start Dual WebSocket Servers (WS 8765 + WSS 8766)
     ws_server = websockets.serve(
         server_instance.handle_client,
-        "0.0.0.0",
+        BIND_HOST,
         WS_PORT,
         ping_interval=None,
         ping_timeout=None,
-        max_size=2048,
+        max_size=MAX_WS_MESSAGE_SIZE,
         max_queue=64,
         compression=None
     )
     wss_server = websockets.serve(
         server_instance.handle_client,
-        "0.0.0.0",
+        BIND_HOST,
         WSS_PORT,
         ssl=ssl_ctx,
         ping_interval=None,
         ping_timeout=None,
-        max_size=2048,
+        max_size=MAX_WS_MESSAGE_SIZE,
         max_queue=64,
         compression=None
     )
 
     await asyncio.gather(ws_server, wss_server)
     await asyncio.Future()
+
 
 if __name__ == "__main__":
     try:

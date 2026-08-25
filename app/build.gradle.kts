@@ -15,8 +15,8 @@ android {
         applicationId = "com.aistudio.pocketpad"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 110
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -31,13 +31,23 @@ android {
         create("release") {
             val keystorePropertiesFile = rootProject.file("keystore.properties")
             if (keystorePropertiesFile.exists()) {
-                val keystoreProperties = Properties()
-                keystoreProperties.load(FileInputStream(keystorePropertiesFile))
-                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
-                storePassword = keystoreProperties["storePassword"] as String
-                keyAlias = keystoreProperties["keyAlias"] as String
-                keyPassword = keystoreProperties["keyPassword"] as String
+                val keystoreProperties = Properties().apply {
+                    load(FileInputStream(keystorePropertiesFile))
+                }
+                val storeFilePath = keystoreProperties.getProperty("storeFile")
+                    ?: error("storeFile missing from keystore.properties")
+                storeFile = rootProject.file(storeFilePath)
+                check(storeFile?.exists() == true) {
+                    "Release keystore not found: ${storeFile?.absolutePath}"
+                }
+                storePassword = keystoreProperties.getProperty("storePassword")
+                    ?: error("storePassword missing from keystore.properties")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                    ?: error("keyAlias missing from keystore.properties")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+                    ?: error("keyPassword missing from keystore.properties")
             } else {
+                // Fallback to local debug keystore for development builds
                 storeFile = file("${rootDir}/debug.keystore")
                 storePassword = "android"
                 keyAlias = "androiddebugkey"
@@ -60,11 +70,11 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = "21"
+        jvmTarget = "17"
     }
     buildFeatures {
         compose = true
@@ -74,6 +84,12 @@ android {
             useLegacyPackaging = false
             keepDebugSymbols.add("**/*.so")
         }
+    }
+}
+
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    compilerOptions {
+        freeCompilerArgs.addAll("-Xjsr305=strict")
     }
 }
 
@@ -99,5 +115,6 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
     implementation("com.google.zxing:core:3.5.3")
 
+    testImplementation("junit:junit:4.13.2")
     debugImplementation(libs.androidx.ui.tooling)
 }

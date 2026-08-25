@@ -35,7 +35,7 @@ class GamepadClient(
                     throw CertificateException("Server certificate chain is empty")
                 }
                 val leafCert = chain[0]
-                leafCert.checkValidity() // Validates expiration and active dates
+                leafCert.checkValidity()
 
                 val subject = leafCert.subjectX500Principal.name
                 val issuer = leafCert.issuerX500Principal.name
@@ -70,7 +70,7 @@ class GamepadClient(
             .writeTimeout(0, TimeUnit.MILLISECONDS)
             .retryOnConnectionFailure(true)
             .build()
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         OkHttpClient.Builder()
             .connectTimeout(3, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -85,7 +85,8 @@ class GamepadClient(
     var isConnected: Boolean = false
         private set
 
-    private var lastPingSendTime: Long = 0L
+    private var connectionGeneration: Long = 0L
+    private var lastPingSendTimeNs: Long = 0L
 
     // Pre-allocated ByteBuffers for zero-allocation hot path
     private val steerBuffer = ByteBuffer.allocate(3).order(ByteOrder.LITTLE_ENDIAN)
@@ -100,7 +101,7 @@ class GamepadClient(
     private val demoToggleBuffer = ByteBuffer.allocate(1)
 
     init {
-        keepaliveBuffer.put(0x00.toByte())
+        keepaliveBuffer.put(Protocol.KEEPALIVE)
         demoToggleBuffer.put(0x11.toByte())
     }
 
@@ -120,6 +121,10 @@ class GamepadClient(
             return
         }
 
+        val currentGeneration = synchronized(this) {
+            ++connectionGeneration
+        }
+
         onConnectionStateChanged(ConnectionState.CONNECTING)
 
         val protocol = if (isHttps) "wss" else "ws"
@@ -137,7 +142,10 @@ class GamepadClient(
                     webSocket: WebSocket,
                     response: Response
                 ) {
-                    // TCP/WebSocket is open, send authentication handshake hello
+                    if (currentGeneration != connectionGeneration) return
+
+                    onConnectionStateChanged(ConnectionState.AUTHENTICATING)
+
                     val hello = """
                         {
                           "type":"hello",
@@ -154,13 +162,15 @@ class GamepadClient(
                     webSocket: WebSocket,
                     text: String
                 ) {
-                    handleIncomingText(text, host)
+                    if (currentGeneration != connectionGeneration) return
+                    handleIncomingText(text, host, webSocket)
                 }
 
                 override fun onMessage(
                     webSocket: WebSocket,
                     bytes: ByteString
                 ) {
+                    if (currentGeneration != connectionGeneration) return
                     if (!authenticated) {
                         webSocket.close(4003, "Binary data before authentication")
                         return
@@ -174,6 +184,7 @@ class GamepadClient(
                     code: Int,
                     reason: String
                 ) {
+                    if (currentGeneration != connectionGeneration) return
                     isConnected = false
                     authenticated = false
                     onConnectionStateChanged(ConnectionState.DISCONNECTED)
@@ -184,6 +195,7 @@ class GamepadClient(
                     t: Throwable,
                     response: Response?
                 ) {
+                    if (currentGeneration != connectionGeneration) return
                     isConnected = false
                     authenticated = false
                     onConnectionStateChanged(ConnectionState.DISCONNECTED)
@@ -192,12 +204,19 @@ class GamepadClient(
         )
     }
 
-    private fun handleIncomingText(text: String, host: String) {
+    private fun handleIncomingText(text: String, host: String, ws: WebSocket) {
         try {
             val json = JSONObject(text)
 
             when (json.optString("type")) {
                 "hello_ack" -> {
+                    val serverVersion = json.optInt("version", -1)
+                    if (serverVersion != Protocol.VERSION) {
+                        ws.close(4004, "Protocol mismatch: server=$serverVersion, client=${Protocol.VERSION}")
+                        onConnectionStateChanged(ConnectionState.ERROR)
+                        return
+                    }
+
                     authenticated = true
                     isConnected = true
 
@@ -218,7 +237,7 @@ class GamepadClient(
                 "error" -> {
                     authenticated = false
                     isConnected = false
-                    onConnectionStateChanged(ConnectionState.DISCONNECTED)
+                    onConnectionStateChanged(ConnectionState.ERROR)
                 }
             }
         } catch (_: Exception) {
@@ -226,13 +245,15 @@ class GamepadClient(
         }
     }
 
+    @Synchronized
     fun disconnect() {
         isConnected = false
         authenticated = false
-        try {
-            webSocket?.close(1000, "User disconnected")
-        } catch (_: Exception) {}
+        val ws = webSocket
         webSocket = null
+        try {
+            ws?.close(1000, "User disconnected")
+        } catch (_: Exception) {}
         onConnectionStateChanged(ConnectionState.DISCONNECTED)
     }
 
@@ -243,7 +264,7 @@ class GamepadClient(
 
         synchronized(steerBuffer) {
             steerBuffer.clear()
-            steerBuffer.put(0x01.toByte())
+            steerBuffer.put(Protocol.STEER)
             steerBuffer.putShort(intVal)
             webSocket?.send(steerBuffer.array().toByteString(0, 3))
         }
@@ -256,7 +277,7 @@ class GamepadClient(
 
         synchronized(pedalBuffer) {
             pedalBuffer.clear()
-            pedalBuffer.put(0x02.toByte())
+            pedalBuffer.put(Protocol.PEDALS)
             pedalBuffer.put(ltByte)
             pedalBuffer.put(rtByte)
             webSocket?.send(pedalBuffer.array().toByteString(0, 3))
@@ -267,7 +288,7 @@ class GamepadClient(
         if (!isConnected || !authenticated) return
         synchronized(buttonBuffer) {
             buttonBuffer.clear()
-            buttonBuffer.put(0x03.toByte())
+            buttonBuffer.put(Protocol.BUTTON)
             buttonBuffer.put(button.index.toByte())
             buttonBuffer.put(if (pressed) 1.toByte() else 0.toByte())
             webSocket?.send(buttonBuffer.array().toByteString(0, 3))
@@ -280,7 +301,7 @@ class GamepadClient(
         val intY = (y.coerceIn(-1f, 1f) * 32767f).toInt().toShort()
 
         val buf = if (isLeft) leftStickBuffer else rightStickBuffer
-        val opcode = if (isLeft) 0x05.toByte() else 0x06.toByte()
+        val opcode = if (isLeft) Protocol.LEFT_STICK else Protocol.RIGHT_STICK
 
         synchronized(buf) {
             buf.clear()
@@ -295,7 +316,7 @@ class GamepadClient(
         if (!isConnected || !authenticated) return
         synchronized(mouseBuffer) {
             mouseBuffer.clear()
-            mouseBuffer.put(0x07.toByte())
+            mouseBuffer.put(Protocol.MOUSE)
             mouseBuffer.putShort(dx)
             mouseBuffer.putShort(dy)
             mouseBuffer.put(buttons)
@@ -307,7 +328,7 @@ class GamepadClient(
         if (!isConnected || !authenticated) return
         synchronized(mediaBuffer) {
             mediaBuffer.clear()
-            mediaBuffer.put(0x08.toByte())
+            mediaBuffer.put(Protocol.MEDIA)
             mediaBuffer.put(keyCode)
             webSocket?.send(mediaBuffer.array().toByteString(0, 2))
         }
@@ -315,11 +336,11 @@ class GamepadClient(
 
     fun sendPing() {
         if (!isConnected || !authenticated) return
-        lastPingSendTime = System.currentTimeMillis()
+        lastPingSendTimeNs = System.nanoTime()
         synchronized(pingBuffer) {
             pingBuffer.clear()
-            pingBuffer.put(0x09.toByte())
-            pingBuffer.putInt((lastPingSendTime and 0xFFFFFFFFL).toInt())
+            pingBuffer.put(Protocol.PING)
+            pingBuffer.putInt((System.currentTimeMillis() and 0xFFFFFFFFL).toInt())
             webSocket?.send(pingBuffer.array().toByteString(0, 5))
         }
     }
@@ -336,16 +357,17 @@ class GamepadClient(
 
     private fun handleIncomingBinary(data: ByteArray) {
         if (data.isEmpty()) return
-        val opcode = data[0].toInt() and 0xFF
+        val opcode = data[0]
 
-        if (opcode == 0x0A) { // Pong
-            val rtt = (System.currentTimeMillis() - lastPingSendTime).toFloat().coerceAtLeast(0.2f)
-            onPingMeasured(rtt)
-        } else if (opcode == 0x0B && data.size >= 3) { // Rumble
+        if (opcode == Protocol.PONG) {
+            val elapsedNs = System.nanoTime() - lastPingSendTimeNs
+            val rttMs = (elapsedNs / 1_000_000f).coerceAtLeast(0.1f)
+            onPingMeasured(rttMs)
+        } else if (opcode == Protocol.RUMBLE && data.size >= 3) {
             val large = (data[1].toInt() and 0xFF) / 255f
             val small = (data[2].toInt() and 0xFF) / 255f
             onRumbleReceived?.invoke(large, small)
-        } else if (opcode == 0x10 && data.size >= 13) { // Telemetry packet
+        } else if (opcode == Protocol.TELEMETRY && data.size == Protocol.TELEMETRY_PACKET_SIZE) {
             val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
             buffer.position(1)
             val currentRpm = buffer.short.toInt() and 0xFFFF

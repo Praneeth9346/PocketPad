@@ -1,0 +1,58 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-release:
+    name: Build Production Release Artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x gradlew
+
+      - name: Configure Keystore (if secrets present)
+        if: env.ANDROID_KEYSTORE_B64 != ''
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$ANDROID_KEYSTORE_B64" | base64 --decode > release-keystore.jks
+          cat > keystore.properties <<EOF
+          storeFile=release-keystore.jks
+          storePassword=$ANDROID_STORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Build Release APK
+        run: ./gradlew :app:assembleRelease
+
+      - name: Generate Checksums
+        run: |
+          mkdir -p artifacts
+          cp app/build/outputs/apk/release/*.apk artifacts/PocketPad-release.apk
+          cd artifacts && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketpad-release-artifacts
+          path: artifacts/*

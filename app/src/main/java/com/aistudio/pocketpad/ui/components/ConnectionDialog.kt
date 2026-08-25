@@ -131,6 +131,8 @@ fun ConnectionDialog(
                             ConnectionState.CONNECTED_USB -> "⚡ Connected via USB Cable (0.2ms Latency)"
                             ConnectionState.CONNECTED_WIFI -> "📶 Connected via 5GHz Wi-Fi (Voice QoS)"
                             ConnectionState.CONNECTING -> "⏳ Connecting to $ipText:$portText..."
+                            ConnectionState.AUTHENTICATING -> "🔒 Authenticating with Security Token..."
+                            ConnectionState.ERROR -> "❌ Authentication / Protocol error. Check your token."
                             ConnectionState.DISCONNECTED -> "● Server Offline. Enter your PC's IP address & Token below:"
                         },
                         fontSize = 10.sp,

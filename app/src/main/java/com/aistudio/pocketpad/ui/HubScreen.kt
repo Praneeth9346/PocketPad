@@ -171,6 +171,8 @@ fun HubScreen(
                         ForzaGreen
                     )
                     ConnectionState.CONNECTING -> Triple("◌ CONNECTING...", ForzaYellow.copy(alpha = 0.15f), ForzaYellow)
+                    ConnectionState.AUTHENTICATING -> Triple("◌ AUTHENTICATING...", ForzaYellow.copy(alpha = 0.15f), ForzaYellow)
+                    ConnectionState.ERROR -> Triple("✕ AUTH / PROTOCOL ERROR", Color(0xFF3A1818), Color(0xFFFF5252))
                     ConnectionState.DISCONNECTED -> Triple("● OFFLINE / STANDBY", Color(0xFF182234), TextMuted)
                 }
 

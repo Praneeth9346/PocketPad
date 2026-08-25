@@ -28,8 +28,10 @@ enum class PedalMode {
 enum class ConnectionState {
     DISCONNECTED,
     CONNECTING,
+    AUTHENTICATING,
     CONNECTED_WIFI,
-    CONNECTED_USB
+    CONNECTED_USB,
+    ERROR
 }
 
 enum class ButtonId(val index: Int) {

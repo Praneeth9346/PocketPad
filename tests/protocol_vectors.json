@@ -1,0 +1,59 @@
+{
+  "keepalive": {
+    "opcode": 0,
+    "hex": "00",
+    "description": "Radio Keepalive"
+  },
+  "steering_center": {
+    "opcode": 1,
+    "hex": "010000",
+    "steering": 0,
+    "description": "Steering Neutral Center"
+  },
+  "steering_right": {
+    "opcode": 1,
+    "hex": "01ff7f",
+    "steering": 32767,
+    "description": "Steering 100% Right"
+  },
+  "steering_left": {
+    "opcode": 1,
+    "hex": "010080",
+    "steering": -32768,
+    "description": "Steering 100% Left"
+  },
+  "pedals_full": {
+    "opcode": 2,
+    "hex": "02ffff",
+    "brake": 255,
+    "throttle": 255,
+    "description": "Full Throttle and Brake"
+  },
+  "pedals_idle": {
+    "opcode": 2,
+    "hex": "020000",
+    "brake": 0,
+    "throttle": 0,
+    "description": "Idle Pedals"
+  },
+  "button_a_pressed": {
+    "opcode": 3,
+    "hex": "030001",
+    "button_id": 0,
+    "pressed": 1,
+    "description": "Button A (Index 0) Pressed"
+  },
+  "button_a_released": {
+    "opcode": 3,
+    "hex": "030000",
+    "button_id": 0,
+    "pressed": 0,
+    "description": "Button A (Index 0) Released"
+  },
+  "ping_echo": {
+    "opcode": 9,
+    "hex": "0915cd5b07",
+    "timestamp": 123456789,
+    "description": "Ping packet with timestamp"
+  }
+}
