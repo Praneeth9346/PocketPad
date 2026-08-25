@@ -43,7 +43,7 @@ PocketPad is engineered for high responsiveness and minimal latency:
 ## 🔒 Security Model
 
 - **Token Authentication**: First WebSocket frame requires a cryptographically secure 32-byte auth token (`hello` ➔ `hello_ack`).
-- **TLS 1.2+ Security**: Self-signed multi-interface SSL certificates covering localhost and local network subnets with strict client certificate validation.
+- **TLS 1.2+ Security**: PocketPad Root CA → CA-signed local server certificate covering localhost and local network subnets → Android trusts bundled PocketPad CA.
 - **Protected APIs**: Administrative endpoints (`/api/joy_cpl`, `/api/restart_adb`, `/api/rotate_token`) strictly require Bearer authorization.
 - **Crash-Safe Reset**: Process exit hooks (`atexit`) ensure virtual controllers are immediately neutralized if the server process terminates.
 

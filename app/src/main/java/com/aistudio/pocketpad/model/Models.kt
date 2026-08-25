@@ -52,6 +52,10 @@ enum class ButtonId(val index: Int) {
     RS(14)
 }
 
+/**
+ * Internal protocol and UI animation state for the racing cockpit.
+ * Used for built-in Dash Demo Mode simulations and optional server telemetry streams.
+ */
 data class TelemetryData(
     val currentRpm: Int = 0,
     val maxRpm: Int = 8500,

@@ -58,7 +58,12 @@ android {
     }
 
     gradle.taskGraph.whenReady {
-        if (hasTask(":app:assembleRelease") || hasTask(":app:packageRelease")) {
+        val releaseRequested =
+            hasTask(":app:assembleRelease") ||
+            hasTask(":app:packageRelease") ||
+            hasTask(":app:bundleRelease")
+
+        if (releaseRequested) {
             val propertiesFile = rootProject.file("keystore.properties")
             check(propertiesFile.exists()) {
                 """
@@ -67,7 +72,7 @@ android {
                 Expected:
                   keystore.properties
 
-                Refusing to create a release APK
+                Refusing to create a release APK or App Bundle
                 with debug signing.
                 """.trimIndent()
             }

@@ -276,9 +276,7 @@ class GamepadBridge:
                     pass
 
     def handle_binary_packet(self, data: bytes):
-        """
-        Fastest path C-speed binary packet dispatcher (< 0.0001 ms) with centralized length validation.
-        """
+        """Fast path binary packet dispatcher with centralized length validation."""
         if not validate_packet(data):
             return None
 

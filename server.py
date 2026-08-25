@@ -592,7 +592,7 @@ class GamepadServer:
 
         try:
             async for message in websocket:
-                # FAST PATH: Binary Packet (< 0.0001 ms)
+                # FAST PATH: binary packet dispatch
                 if isinstance(message, bytes):
                     confirm_as_phone()
                     self.client_last_activity[websocket] = time.monotonic()
