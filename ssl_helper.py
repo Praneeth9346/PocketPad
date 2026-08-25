@@ -197,7 +197,7 @@ def certificate_matches_ips(
     certificate: x509.Certificate,
     local_ips: list[str],
 ) -> bool:
-    """Check if the certificate SANs contain all required IPs and localhost."""
+    """Return True when the existing server certificate contains every currently required IP/DNS SAN."""
     required = {
         "localhost",
         "127.0.0.1",
@@ -223,9 +223,14 @@ def certificate_matches_ips(
 def ensure_server_certificate(
     local_ips: list[str],
 ) -> None:
-    """Ensure valid server certificate exists and matches current IPs."""
+    """Ensure the server certificate exists and contains all currently active local IP addresses.
+
+    The Root CA is preserved permanently.
+    Only the server certificate/key are regenerated.
+    """
     generate_ca()
 
+    # No server certificate yet.
     if not SERVER_CERT_FILE.exists() or not SERVER_KEY_FILE.exists():
         generate_server_certificate(local_ips)
         return
@@ -235,20 +240,24 @@ def ensure_server_certificate(
         if not certificate_matches_ips(certificate, local_ips):
             generate_server_certificate(local_ips)
     except Exception:
+        # Corrupt/invalid certificate: regenerate the server certificate.
         generate_server_certificate(local_ips)
 
 
-def get_ssl_context(local_ip: str = "127.0.0.1") -> ssl.SSLContext:
+def get_ssl_context(
+    local_ip: str = "127.0.0.1",
+) -> ssl.SSLContext:
     """Get or generate a stable TLS 1.2+ SSL context signed by PocketPad CA."""
-    ensure_server_certificate(get_all_local_ips())
+    local_ips = get_all_local_ips()
+    ensure_server_certificate(local_ips)
 
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-    ssl_context.load_cert_chain(
+    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ssl_ctx.load_cert_chain(
         certfile=str(SERVER_CERT_FILE),
         keyfile=str(SERVER_KEY_FILE),
     )
-    return ssl_context
+    return ssl_ctx
 
 
 if __name__ == "__main__":
