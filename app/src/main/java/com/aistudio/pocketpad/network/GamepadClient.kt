@@ -141,6 +141,13 @@ class GamepadClient(
 
         onConnectionStateChanged(ConnectionState.CONNECTING)
 
+        // Plain WS is allowed only for loopback / USB tethering.
+        // LAN connections must use WSS.
+        if (!isAllowedTransport(host, isHttps)) {
+            onConnectionStateChanged(ConnectionState.ERROR)
+            return
+        }
+
         val protocol = if (isHttps) "wss" else "ws"
         val request = Request.Builder()
             .url("$protocol://$host:$port")
@@ -443,5 +450,26 @@ class GamepadClient(
     fun toggleDemoMode() {
         if (!authenticated) return
         webSocket?.send(demoToggleBuffer.array().toByteString())
+    }
+
+    /**
+     * Return true if the transport selection is safe.
+     *
+     * Secure (WSS) connections are always allowed.
+     * Plain WS is restricted to loopback / USB tethering addresses only.
+     * Any attempt to use plain WS over a LAN address is rejected.
+     */
+    private fun isAllowedTransport(
+        host: String,
+        secure: Boolean
+    ): Boolean {
+        if (secure) {
+            return true
+        }
+
+        // Plain WS is allowed only for local/USB operation.
+        return host == "127.0.0.1" ||
+            host == "localhost" ||
+            host == "::1"
     }
 }

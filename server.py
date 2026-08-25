@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
@@ -33,6 +34,11 @@ HTTPS_PORT = int(os.environ.get("POCKETPAD_HTTPS_PORT", "8443"))
 WS_PORT = int(os.environ.get("POCKETPAD_WS_PORT", "8765"))
 WSS_PORT = int(os.environ.get("POCKETPAD_WSS_PORT", "8766"))
 PROTOCOL_VERSION = 1
+
+# Security constants
+PAIRING_PATH = "/pair"
+WS_LOOPBACK_HOST = "127.0.0.1"   # plain WS is loopback-only
+WSS_BIND_HOST = BIND_HOST         # WSS serves the full LAN
 CLIENT_HEARTBEAT_TIMEOUT = 8.0  # seconds without any packet → reset controller
 MAX_WS_MESSAGE_SIZE = 64 * 1024  # 64 KB
 
@@ -214,6 +220,30 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
+    def _is_secure_request(self) -> bool:
+        """
+        Return True only when this request was received by the HTTPS server.
+
+        HTTP and HTTPS use the same handler class, so the server instance
+        marks the handler with `is_https`.
+        """
+        return bool(
+            getattr(self.server, "is_https", False)
+        )
+
+    def _is_loopback_client(self) -> bool:
+        client_ip = self.client_address[0]
+        return client_ip in {"127.0.0.1", "::1"}
+
+    def send_json(self, data: dict, status: int = 200) -> None:
+        """Helper to write a JSON response with security headers."""
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        send_security_headers(self)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _authorized(self) -> bool:
         # Check Authorization header (preferred)
         auth = self.headers.get("Authorization", "")
@@ -324,21 +354,36 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(res).encode("utf-8"))
             return
 
-        # 5. Pairing Code Exchange API
-        elif self.path.startswith("/pair") or self.path.startswith("/api/pair"):
-            query = self.path.split("?", 1)[1] if "?" in self.path else ""
-            params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
-            code = params.get("code", "")
-            if code and consume_pairing_token(code):
-                res = {"ok": True, "token": EXPECTED_TOKEN}
-                self.send_response(200)
-            else:
-                res = {"ok": False, "error": "Invalid or expired pairing code"}
-                self.send_response(403)
-            send_security_headers(self)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(res).encode("utf-8"))
+        # 5. Pairing Code Exchange API — HTTPS only
+        elif self.path.startswith(PAIRING_PATH):
+            # Pairing MUST only happen over HTTPS.
+            if not self._is_secure_request():
+                self.send_error(
+                    403,
+                    "Pairing requires HTTPS.",
+                )
+                return
+
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+
+            code = params.get("code", [None])[0]
+
+            if not code:
+                self.send_json(
+                    {"ok": False, "error": "missing_pairing_code"},
+                    status=400,
+                )
+                return
+
+            if not consume_pairing_token(code):
+                self.send_json(
+                    {"ok": False, "error": "invalid_or_expired_pairing_code"},
+                    status=401,
+                )
+                return
+
+            self.send_json({"ok": True, "token": EXPECTED_TOKEN})
             return
 
         # 6. Connection QR Code Image (Protected)
@@ -371,19 +416,21 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
 
 
 def run_http_server():
-    """Run standard HTTP server on port 8000."""
+    """Run standard HTTP server on port 8000 (loopback and LAN, no pairing)."""
     try:
         server = HTTPServer((BIND_HOST, HTTP_PORT), CustomHTTPHandler)
+        server.is_https = False
         server.serve_forever()
     except Exception as e:
         logger.error(f"[HTTP] Server error: {e}")
 
 
 def run_https_server(ssl_ctx):
-    """Run secure HTTPS server on port 8443."""
+    """Run secure HTTPS server on port 8443 (full LAN, pairing allowed)."""
     try:
         server = HTTPServer((BIND_HOST, HTTPS_PORT), CustomHTTPHandler)
         server.socket = ssl_ctx.wrap_socket(server.socket, server_side=True)
+        server.is_https = True
         server.serve_forever()
     except Exception as e:
         logger.error(f"[HTTPS] Server error: {e}")
@@ -719,27 +766,29 @@ async def main():
     # 4. Print Unified Dashboard
     print_banner(primary_ip, all_ips, adb_msg, adb_ok)
 
-    # 5. Start Dual WebSocket Servers (WS 8765 + WSS 8766)
+    # 5. Start Dual WebSocket Servers
+    #    WS  8765 → loopback only (USB / local dev)
+    #    WSS 8766 → LAN (production Wi-Fi path)
     ws_server = websockets.serve(
         server_instance.handle_client,
-        BIND_HOST,
+        WS_LOOPBACK_HOST,
         WS_PORT,
-        ping_interval=None,
-        ping_timeout=None,
         max_size=MAX_WS_MESSAGE_SIZE,
         max_queue=64,
         compression=None,
+        ping_interval=None,
+        ping_timeout=None,
     )
     wss_server = websockets.serve(
         server_instance.handle_client,
-        BIND_HOST,
+        WSS_BIND_HOST,
         WSS_PORT,
         ssl=ssl_ctx,
-        ping_interval=None,
-        ping_timeout=None,
         max_size=MAX_WS_MESSAGE_SIZE,
         max_queue=64,
         compression=None,
+        ping_interval=None,
+        ping_timeout=None,
     )
 
     await asyncio.gather(ws_server, wss_server)
