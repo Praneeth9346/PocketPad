@@ -20,6 +20,7 @@ all_hidden = [
     'websockets.asyncio',
     'websockets.asyncio.server',
     'controller_bridge',
+    'paths',
     'ssl_helper',
     'usb_setup',
     'server',
