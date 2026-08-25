@@ -342,10 +342,13 @@ def print_banner(primary_ip: str, all_ips: list, usb_status: str, adb_active: bo
         print(f"  👉 Open on phone:  https://localhost:{HTTPS_PORT}  (or http://localhost:{HTTP_PORT})")
     else:
         print(f"  ★ USB Status: {usb_status}")
+    for ip in all_ips:
+        if ip != "127.0.0.1" and ip.startswith(("10.18.", "192.168.42.", "172.20.")):
+            print(f"  👉 USB Tethering Direct URL:                https://{ip}:{HTTPS_PORT}")
 
     print("\n[ 📶 METHOD A: WIRELESS 5GHz WI-FI MODE (WMM QoS) ]")
     for ip in all_ips:
-        if ip != "127.0.0.1":
+        if ip != "127.0.0.1" and not ip.startswith(("10.18.", "192.168.42.", "172.20.")):
             print(f"  👉 Wi-Fi URL:                               https://{ip}:{HTTPS_PORT}")
 
     print("\n--- Scan QR Code with Phone for Wireless Connection ---")
@@ -517,7 +520,7 @@ class GamepadServer:
             """Upgrade a pending connection to a confirmed phone client."""
             info = self.client_infos.get(websocket)
             if info and not info["confirmed"]:
-                is_usb = client_ip in ("127.0.0.1", "::1")
+                is_usb = client_ip in ("127.0.0.1", "::1") or client_ip.startswith(("10.18.", "192.168.42.", "172.20."))
                 info["is_usb"] = is_usb
                 info["label"] = "USB Wired" if is_usb else "Wireless Wi-Fi (WMM QoS)"
                 info["confirmed"] = True
