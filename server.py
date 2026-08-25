@@ -120,14 +120,14 @@ def emergency_reset():
 
 def get_web_dir() -> Path:
     if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).parent
-        local_web = exe_dir / "web"
-        if local_web.exists():
-            return local_web
         if hasattr(sys, "_MEIPASS"):
             meipass_web = Path(sys._MEIPASS) / "web"
             if meipass_web.exists():
                 return meipass_web
+        exe_dir = Path(sys.executable).parent
+        local_web = exe_dir / "web"
+        if local_web.exists():
+            return local_web
     return Path(__file__).parent / "web"
 
 

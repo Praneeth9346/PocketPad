@@ -82,6 +82,7 @@
       return;
     }
 
+    const spinner = document.getElementById('qr-loading-spinner');
     try {
       const response = await apiFetch(`/api/qr?t=${Date.now()}`);
       if (!response.ok) {
@@ -99,9 +100,15 @@
 
       qrImgElement.dataset.objectUrl = objectUrl;
       qrImgElement.src = objectUrl;
+      qrImgElement.style.display = 'block';
+      if (spinner) spinner.style.display = 'none';
     } catch (error) {
       addLog(`Failed to load pairing QR: ${error.message}`, "error");
-      qrImgElement.removeAttribute("src");
+      qrImgElement.style.display = 'none';
+      if (spinner) {
+        spinner.style.display = 'flex';
+        spinner.textContent = 'Failed to generate QR';
+      }
     }
   }
 
