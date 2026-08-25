@@ -33,7 +33,38 @@
   const currentHost = window.location.hostname || 'localhost';
 
   const urlParams = new URLSearchParams(window.location.search);
-  const authToken = urlParams.get('token') || '';
+  const desktopSession = urlParams.get('session') || '';
+  let authToken = '';
+  let sessionBootstrapComplete = false;
+
+  async function bootstrapDesktopSession() {
+    if (!desktopSession) {
+      throw new Error('Missing desktop session.');
+    }
+
+    const response = await fetch(
+      `/desktop-session?session=${encodeURIComponent(desktopSession)}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`Desktop authentication failed (${response.status}).`);
+    }
+
+    const data = await response.json();
+
+    if (!data.ok || !data.authenticated || !data.token) {
+      throw new Error('Desktop session exchange returned an invalid response.');
+    }
+
+    authToken = data.token;
+    sessionBootstrapComplete = true;
+
+    // Remove the one-time session from the visible URL.
+    // The access token remains only in JavaScript memory.
+    try {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } catch (_) {}
+  }
 
   async function apiFetch(url, options = {}) {
     const headers = new Headers(options.headers || {});
@@ -46,10 +77,36 @@
     });
   }
 
-  function initQrCode() {
-    if (qrImgElement) {
-      qrImgElement.src = `/api/qr?token=${encodeURIComponent(authToken)}&t=${Date.now()}`;
+  async function loadQrCode() {
+    if (!qrImgElement) {
+      return;
     }
+
+    try {
+      const response = await apiFetch(`/api/qr?t=${Date.now()}`);
+      if (!response.ok) {
+        throw new Error(`QR request failed: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+
+      // Release previous QR object URL.
+      const previousUrl = qrImgElement.dataset.objectUrl;
+      if (previousUrl) {
+        URL.revokeObjectURL(previousUrl);
+      }
+
+      qrImgElement.dataset.objectUrl = objectUrl;
+      qrImgElement.src = objectUrl;
+    } catch (error) {
+      addLog(`Failed to load pairing QR: ${error.message}`, "error");
+      qrImgElement.removeAttribute("src");
+    }
+  }
+
+  function initQrCode() {
+    loadQrCode();
     pollStatus();
     setInterval(pollStatus, 1500);
   }
@@ -79,8 +136,12 @@
     apiFetch('/api/status')
       .then(res => res.json())
       .then(data => {
-        if (urlWifi && data.primary_ip) urlWifi.textContent = `https://${data.primary_ip}:${data.https_port}?token=${authToken}`;
-        if (urlUsb && data.https_port) urlUsb.textContent = `https://localhost:${data.https_port}?token=${authToken}`;
+        if (urlWifi && data.primary_ip) {
+          urlWifi.textContent = `https://${data.primary_ip}:${data.https_port}`;
+        }
+        if (urlUsb && data.https_port) {
+          urlUsb.textContent = `https://localhost:${data.https_port}`;
+        }
 
         // ViGEmBus Check
         const vigemDot = document.getElementById('dot-vigem');
@@ -380,7 +441,7 @@
   };
 
   window.openWebLink = function () {
-    window.open(`https://${currentHost}:8443?token=${encodeURIComponent(authToken)}`, '_blank');
+    window.open(`https://${currentHost}:8443`, '_blank');
   };
 
   window.repairDriver = function () {
@@ -418,7 +479,22 @@
   };
 
   // Startup
-  initQrCode();
-  connectWebSocket();
-  drawSteering(0);
+  async function initializeDesktopControlCenter() {
+    try {
+      addLog("Authenticating desktop control center...", "info");
+      await bootstrapDesktopSession();
+      addLog("Desktop authentication successful.", "success");
+      initQrCode();
+      connectWebSocket();
+      drawSteering(0);
+    } catch (error) {
+      addLog(`Desktop startup failed: ${error.message}`, "error");
+      const device = document.getElementById("stat-device");
+      if (device) {
+        device.textContent = "Desktop Authentication Failed";
+      }
+    }
+  }
+
+  initializeDesktopControlCenter();
 })();

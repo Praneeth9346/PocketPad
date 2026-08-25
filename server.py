@@ -195,13 +195,26 @@ def consume_pairing_token(token: str) -> bool:
     return time.monotonic() < expiry
 
 
-# Desktop session tokens (short-lived, one-time, loopback-only)
+# Desktop session tokens (short-lived, one-time bootstrap, loopback-only)
 DESKTOP_SESSION_TTL = 300.0
+DESKTOP_ACCESS_TTL = 900.0
 DESKTOP_SESSIONS: dict[str, float] = {}
+DESKTOP_ACCESS_TOKENS: dict[str, float] = {}
+
+
+def cleanup_expired_desktop_tokens() -> None:
+    """Evict expired desktop access tokens."""
+    now = time.monotonic()
+    expired = [
+        token for token, expiry in DESKTOP_ACCESS_TOKENS.items()
+        if expiry <= now
+    ]
+    for token in expired:
+        DESKTOP_ACCESS_TOKENS.pop(token, None)
 
 
 def create_desktop_session() -> str:
-    """Generate a short-lived one-time desktop session token (5 min TTL)."""
+    """Create a short-lived, one-time bootstrap session used by the native desktop WebView."""
     session = secrets.token_urlsafe(32)
     DESKTOP_SESSIONS[session] = (
         time.monotonic()
@@ -213,7 +226,7 @@ def create_desktop_session() -> str:
 def consume_desktop_session(
     session: str,
 ) -> bool:
-    """Validate and immediately invalidate a desktop session token."""
+    """Consume a desktop bootstrap session exactly once."""
     expiry = DESKTOP_SESSIONS.pop(
         session,
         None,
@@ -221,6 +234,35 @@ def consume_desktop_session(
     if expiry is None:
         return False
     return time.monotonic() < expiry
+
+
+def create_desktop_access_token() -> str:
+    """Create an in-memory short-lived credential for the desktop WebView.
+
+    This is NOT the permanent PocketPad master token.
+    """
+    cleanup_expired_desktop_tokens()
+    token = secrets.token_urlsafe(32)
+    DESKTOP_ACCESS_TOKENS[token] = (
+        time.monotonic()
+        + DESKTOP_ACCESS_TTL
+    )
+    return token
+
+
+def _desktop_token_matches(
+    candidate: object,
+) -> bool:
+    """Validate and consume expired desktop access credentials safely."""
+    if not isinstance(candidate, str):
+        return False
+    expiry = DESKTOP_ACCESS_TOKENS.get(candidate)
+    if expiry is None:
+        return False
+    if time.monotonic() >= expiry:
+        DESKTOP_ACCESS_TOKENS.pop(candidate, None)
+        return False
+    return True
 
 
 def send_security_headers(handler: SimpleHTTPRequestHandler):
@@ -273,17 +315,30 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _authorized(self) -> bool:
-        # Check Authorization header (preferred)
-        auth = self.headers.get("Authorization", "")
-        if auth.startswith("Bearer ") and _token_matches(auth[7:].strip()):
-            return True
+        """Authorize HTTP API requests using either:
+        1. permanent server token, or
+        2. short-lived desktop access token.
 
-        # Check query string (for QR bootstrap only)
+        Permanent tokens are supported only for legacy/QR bootstrap usage.
+        Desktop UI uses the short-lived Authorization Bearer token.
+        """
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            candidate = auth[7:].strip()
+            if _token_matches(candidate):
+                return True
+            if _desktop_token_matches(candidate):
+                return True
+
+        # Legacy master-token query support only.
+        # Desktop UI must NOT use this path.
         if "?" in self.path:
             query = self.path.split("?", 1)[1]
             for param in query.split("&"):
-                if param.startswith("token=") and _token_matches(param[6:].strip()):
-                    return True
+                if param.startswith("token="):
+                    candidate = param[6:].strip()
+                    if _token_matches(candidate):
+                        return True
         return False
 
     def do_GET(self):
@@ -462,12 +517,21 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
 
             if not consume_desktop_session(session):
                 self.send_json(
-                    {"ok": False, "error": "invalid_or_expired_session"},
+                    {
+                        "ok": False,
+                        "error": "invalid_or_expired_session",
+                    },
                     status=401,
                 )
                 return
 
-            self.send_json({"ok": True, "authenticated": True})
+            desktop_token = create_desktop_access_token()
+            self.send_json({
+                "ok": True,
+                "authenticated": True,
+                "token": desktop_token,
+                "expires_in": int(DESKTOP_ACCESS_TTL),
+            })
             return
 
         # 8. Static Web Assets
@@ -649,10 +713,22 @@ class GamepadServer:
                     await websocket.close(code=4000, reason="Expected hello message")
                     return
 
-                if not _token_matches(hello.get("token", "")):
-                    self.auth_failures[client_ip] = self.auth_failures.get(client_ip, 0) + 1
-                    logger.warning("Authentication rejected from %s: invalid token", client_ip)
-                    await websocket.close(code=4001, reason="Invalid token")
+                candidate_token = hello.get("token", "")
+                if not (
+                    _token_matches(candidate_token)
+                    or _desktop_token_matches(candidate_token)
+                ):
+                    self.auth_failures[client_ip] = (
+                        self.auth_failures.get(client_ip, 0) + 1
+                    )
+                    logger.warning(
+                        "Authentication rejected from %s: invalid token",
+                        client_ip,
+                    )
+                    await websocket.close(
+                        code=4001,
+                        reason="Invalid token",
+                    )
                     return
 
                 # Auth succeeded, reset failure count
