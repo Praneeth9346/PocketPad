@@ -41,3 +41,5 @@ key.pem
 # Deliverables binaries (kept locally in project folder)
 deliverables/*.exe
 deliverables/*.apk
+deliverables/web/
+deliverables/*.pem
