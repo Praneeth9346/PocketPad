@@ -79,6 +79,8 @@
   let steeringDeadzone = 0.00; // 0% phone sensor tremor deadzone
   let antiDeadzone = 0.20; // 20% Game Deadband Bypass (Instantly eliminates Forza's inside deadzone)
   let steeringActive = false; // hysteresis latch — prevents 0%/antiDeadzone chatter at rest
+  let lastValidRollAngle = 0;
+  let hasValidAngle = false;
   let pedalMode = 'analog';
   let accumulatedWheelAngle = 0.0;
   let lastRawPlanar = null;
@@ -477,6 +479,15 @@
 
     // Numerically stable atan2 (derivative bounded everywhere, no singularity near ±90°)
     const currentRollAngle = Math.atan2(lateralG, Math.max(0.001, verticalG)) * (180 / Math.PI);
+
+    // Spike Rejection: discard single bad devicemotion frames (sensor glitches),
+    // not slow real movement — real wrist turns can't jump >40° between frames.
+    if (hasValidAngle && Math.abs(currentRollAngle - lastValidRollAngle) > 40) {
+      return; // skip this frame, hold last good state
+    }
+    lastValidRollAngle = currentRollAngle;
+    hasValidAngle = true;
+
     latestRawAngle = currentRollAngle;
 
     // Delta from calibrated center + manual trim
@@ -565,6 +576,7 @@
     manualTrimOffset = 0.0;
     smoothedAngle = 0.0;
     steeringActive = false;
+    hasValidAngle = false;
     currentSteerX = 0.0;
     lastSentSteerX = 999.0;
 

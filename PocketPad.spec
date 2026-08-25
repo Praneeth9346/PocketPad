@@ -9,10 +9,9 @@ block_cipher = None
 vg_datas, vg_binaries, vg_hidden = collect_all('vgamepad')
 qr_datas, qr_binaries, qr_hidden = collect_all('qrcode')
 wv_datas, wv_binaries, wv_hidden = collect_all('webview')
-pp_datas, pp_binaries, pp_hidden = collect_all('pocketpad')
 
-all_datas = [('web', 'web')] + vg_datas + qr_datas + wv_datas + pp_datas
-all_binaries = vg_binaries + qr_binaries + wv_binaries + pp_binaries
+all_datas = [('web', 'web')] + vg_datas + qr_datas + wv_datas
+all_binaries = vg_binaries + qr_binaries + wv_binaries
 all_hidden = [
     'vgamepad',
     'qrcode',
@@ -20,14 +19,6 @@ all_hidden = [
     'websockets',
     'websockets.asyncio',
     'websockets.asyncio.server',
-    'aiohttp',
-    'pocketpad',
-    'pocketpad.config',
-    'pocketpad.core',
-    'pocketpad.core.controller',
-    'pocketpad.core.network',
-    'pocketpad.core.telemetry',
-    'pocketpad.core.utils',
     'controller_bridge',
     'ssl_helper',
     'usb_setup',
@@ -36,7 +27,7 @@ all_hidden = [
     'webview',
     'clr_loader',
     'pythonnet',
-] + vg_hidden + qr_hidden + wv_hidden + pp_hidden
+] + vg_hidden + qr_hidden + wv_hidden
 
 a = Analysis(
     ['desktop_app.py'],

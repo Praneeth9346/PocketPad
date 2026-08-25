@@ -77,6 +77,11 @@ def get_or_create_token() -> str:
 
 EXPECTED_TOKEN = get_or_create_token()
 
+def _token_matches(candidate) -> bool:
+    if not isinstance(candidate, str):
+        return False
+    return secrets.compare_digest(candidate, EXPECTED_TOKEN)
+
 # Global server instance reference for REST API
 GLOBAL_SERVER = None
 
@@ -118,14 +123,14 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
     def _authorized(self) -> bool:
         # Check Authorization header
         auth = self.headers.get("Authorization", "")
-        if auth.startswith("Bearer ") and auth[7:] == EXPECTED_TOKEN:
+        if auth.startswith("Bearer ") and _token_matches(auth[7:]):
             return True
         
         # Check query string
         if "?" in self.path:
             query = self.path.split("?", 1)[1]
             for param in query.split("&"):
-                if param == f"token={EXPECTED_TOKEN}":
+                if param.startswith("token=") and _token_matches(param[6:]):
                     return True
         return False
     
@@ -350,7 +355,7 @@ class GamepadServer:
                     await websocket.close(code=4000, reason="Expected hello message")
                     return
 
-                if hello.get("token") != EXPECTED_TOKEN:
+                if not _token_matches(hello.get("token", "")):
                     logger.warning(f"Auth rejected from {client_address}: invalid token")
                     await websocket.close(code=4001, reason="Invalid token")
                     return
