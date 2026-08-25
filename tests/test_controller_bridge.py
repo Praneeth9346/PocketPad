@@ -100,7 +100,11 @@ def test_bridge_rumble_callback():
         b"\xff" * 64,
     ],
 )
-def test_invalid_packet_lengths(packet):
+def test_invalid_packets(packet):
+    assert not validate_packet(packet)
+
+
+def test_invalid_packet_lengths(packet=b"\x01"):
     assert not validate_packet(packet)
 
 

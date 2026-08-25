@@ -5,6 +5,7 @@ object Protocol {
 
     const val KEEPALIVE: Byte = 0x00
     const val STEER: Byte = 0x01
+    const val STEERING: Byte = 0x01
     const val PEDALS: Byte = 0x02
     const val BUTTON: Byte = 0x03
     const val SNAPSHOT: Byte = 0x04

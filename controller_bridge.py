@@ -25,35 +25,50 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# Centralized Protocol Opcodes
-OP_KEEPALIVE = 0x00
-OP_STEER = 0x01
-OP_PEDALS = 0x02
-OP_BUTTON = 0x03
-OP_SNAPSHOT = 0x04
-OP_LEFT_STICK = 0x05
-OP_RIGHT_STICK = 0x06
-OP_MOUSE = 0x07
-OP_MEDIA = 0x08
-OP_PING = 0x09
-OP_PONG = 0x0A
-OP_RUMBLE = 0x0B
+# Centralized Protocol Opcodes & Aliases
+PROTOCOL_VERSION = 1
+
+KEEPALIVE = 0x00
+STEERING = 0x01
+PEDALS = 0x02
+BUTTON = 0x03
+SNAPSHOT = 0x04
+LEFT_STICK = 0x05
+RIGHT_STICK = 0x06
+MOUSE = 0x07
+MEDIA = 0x08
+PING = 0x09
+PONG = 0x0A
+RUMBLE = 0x0B
+
+OP_KEEPALIVE = KEEPALIVE
+OP_STEER = STEERING
+OP_PEDALS = PEDALS
+OP_BUTTON = BUTTON
+OP_SNAPSHOT = SNAPSHOT
+OP_LEFT_STICK = LEFT_STICK
+OP_RIGHT_STICK = RIGHT_STICK
+OP_MOUSE = MOUSE
+OP_MEDIA = MEDIA
+OP_PING = PING
+OP_PONG = PONG
+OP_RUMBLE = RUMBLE
 OP_TELEMETRY = 0x10
 OP_LATENCY_PROBE = 0x20
 
 # Expected Packet Lengths Table
 PACKET_LENGTHS = {
-    OP_KEEPALIVE: 1,
-    OP_STEER: 3,
-    OP_PEDALS: 3,
-    OP_BUTTON: 3,
-    OP_SNAPSHOT: 13,
-    OP_LEFT_STICK: 5,
-    OP_RIGHT_STICK: 5,
-    OP_MOUSE: 6,
-    OP_MEDIA: 2,
-    OP_PING: 5,
-    OP_LATENCY_PROBE: 13,
+    0x00: 1,
+    0x01: 3,
+    0x02: 3,
+    0x03: 3,
+    0x04: 13,
+    0x05: 5,
+    0x06: 5,
+    0x07: 6,
+    0x08: 2,
+    0x09: 5,
+    0x20: 13,
 }
 
 
@@ -61,10 +76,15 @@ def validate_packet(packet: bytes) -> bool:
     """Validate binary packet structure and length against protocol specification."""
     if not packet:
         return False
-    expected_length = PACKET_LENGTHS.get(packet[0])
-    if expected_length is None:
+
+    opcode = packet[0]
+
+    expected = PACKET_LENGTHS.get(opcode)
+
+    if expected is None:
         return False
-    return len(packet) == expected_length
+
+    return len(packet) == expected
 
 
 # Whitelisted Media Keys (0xAD=Mute, 0xAE=VolDown, 0xAF=VolUp, 0xB0=Next, 0xB1=Prev, 0xB2=Stop, 0xB3=Play/Pause)

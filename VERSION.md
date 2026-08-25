@@ -3,7 +3,7 @@
 > **Release Version:** 1.1.0 (Production Hardened)
 > **Release Date:** August 25, 2026
 > **Binary Artifact:** deliverables/PocketPad.exe (43.9 MB) & deliverables/PocketPad-release.apk (5.8 MB)
-> **Status:** Production Verified Stable 🏆
+> **Status:** Release Candidate
 
 ---
 

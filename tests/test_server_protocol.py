@@ -82,12 +82,16 @@ async def test_missing_handshake(server_fixture):
 
 
 @pytest.mark.asyncio
-async def test_binary_before_authentication(server_fixture):
+async def test_binary_before_auth(server_fixture):
     with pytest.raises(websockets.exceptions.ConnectionClosed):
         async with websockets.connect(server_fixture.ws_uri) as ws:
-            # Send steering packet before authenticating
             await ws.send(b"\x01\x00\x00")
             await asyncio.wait_for(ws.recv(), timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_binary_before_authentication(server_fixture):
+    await test_binary_before_auth(server_fixture)
 
 
 @pytest.mark.asyncio

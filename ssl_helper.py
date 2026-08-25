@@ -5,10 +5,8 @@ Manages the persistent PocketPad Root CA and issues CA-signed server certificate
 
 import ipaddress
 import os
-import shutil
 import socket
 import ssl
-import stat
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,14 +35,11 @@ SERVER_CERT_FILE = BASE_DIR / "cert.pem"
 CERT_FILE = SERVER_CERT_FILE
 KEY_FILE = SERVER_KEY_FILE
 
-ANDROID_RAW_RES = BASE_DIR / "app" / "src" / "main" / "res" / "raw"
-ANDROID_CA_FILE = ANDROID_RAW_RES / "pocketpad_ca.crt"
-
 
 def secure_file(path: Path):
     """Restrict file permissions to current user only."""
     try:
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        os.chmod(path, 0o600)
     except OSError:
         pass
 
@@ -65,8 +60,6 @@ def get_all_local_ips() -> list[str]:
 def generate_ca() -> None:
     """Generate persistent PocketPad Root Certificate Authority (CA)."""
     if CA_KEY_FILE.exists() and CA_CERT_FILE.exists():
-        # Ensure Android raw resource is in sync
-        _sync_ca_to_android()
         return
 
     key = rsa.generate_private_key(
@@ -124,17 +117,14 @@ def generate_ca() -> None:
     CA_CERT_FILE.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     secure_file(CA_CERT_FILE)
 
-    _sync_ca_to_android()
 
-
-def _sync_ca_to_android() -> None:
-    """Copy public CA certificate to Android app raw resources for trust pinning."""
-    try:
-        if ANDROID_RAW_RES.parent.exists():
-            ANDROID_RAW_RES.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(CA_CERT_FILE, ANDROID_CA_FILE)
-    except Exception:
-        pass
+def sync_ca_to_android() -> None:
+    """Explicit developer command to sync CA certificate to Android raw resource."""
+    generate_ca()
+    target = BASE_DIR / "app" / "src" / "main" / "res" / "raw" / "pocketpad_ca.crt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(CA_CERT_FILE.read_bytes())
+    print(f"CA copied to {target}")
 
 
 def generate_server_certificate(local_ips: list[str] | None = None) -> None:
@@ -161,11 +151,11 @@ def generate_server_certificate(local_ips: list[str] | None = None) -> None:
         x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
     ]
 
-    for ip_str in local_ips:
+    for ip in local_ips:
         try:
-            san_entries.append(x509.IPAddress(ipaddress.ip_address(ip_str)))
+            san_entries.append(x509.IPAddress(ipaddress.ip_address(ip)))
         except ValueError:
-            san_entries.append(x509.DNSName(ip_str))
+            continue
 
     subject = x509.Name(
         [
@@ -216,13 +206,17 @@ def get_ssl_context(local_ip: str = "127.0.0.1") -> ssl.SSLContext:
     if not SERVER_CERT_FILE.exists() or not SERVER_KEY_FILE.exists() or not CA_CERT_FILE.exists():
         generate_server_certificate(get_all_local_ips())
 
-    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ssl_ctx.load_cert_chain(certfile=str(SERVER_CERT_FILE), keyfile=str(SERVER_KEY_FILE))
-    return ssl_ctx
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    ssl_context.load_cert_chain(
+        certfile=str(SERVER_CERT_FILE),
+        keyfile=str(SERVER_KEY_FILE),
+    )
+    return ssl_context
 
 
 if __name__ == "__main__":
     generate_ca()
     generate_server_certificate()
+    sync_ca_to_android()
     print("[+] PocketPad CA and Server Certificate successfully generated and verified.")

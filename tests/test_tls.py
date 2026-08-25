@@ -56,3 +56,9 @@ def test_server_certificate_san_contains_localhost_and_ips():
 
     assert "localhost" in dns_names
     assert "127.0.0.1" in ip_addresses
+
+
+def test_server_certificate_is_not_ca():
+    server_cert = x509.load_pem_x509_certificate(SERVER_CERT_FILE.read_bytes())
+    basic_constraints = server_cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+    assert basic_constraints.ca is False

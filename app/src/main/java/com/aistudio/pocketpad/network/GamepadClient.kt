@@ -25,23 +25,26 @@ import javax.net.ssl.X509TrustManager
 import kotlin.math.roundToInt
 
 class GamepadClient(
-    private val context: Context,
+    context: Context,
     private val onConnectionStateChanged: (ConnectionState) -> Unit,
     private val onPingMeasured: (Float) -> Unit,
     private val onTelemetryReceived: (TelemetryData) -> Unit,
     private val onRumbleReceived: ((Float, Float) -> Unit)? = null
 ) {
+    private val appContext = context.applicationContext
+
     private fun createPocketPadTrustManager(): X509TrustManager {
         val certificateFactory = CertificateFactory.getInstance("X.509")
-        val certificate = context.applicationContext.resources
+
+        val caCertificate = appContext.resources
             .openRawResource(com.aistudio.pocketpad.R.raw.pocketpad_ca)
-            .use {
-                certificateFactory.generateCertificate(it)
+            .use { input ->
+                certificateFactory.generateCertificate(input)
             }
 
         val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
             load(null, null)
-            setCertificateEntry("pocketpad-ca", certificate)
+            setCertificateEntry("pocketpad-root-ca", caCertificate)
         }
 
         val trustManagerFactory = TrustManagerFactory.getInstance(
@@ -51,32 +54,35 @@ class GamepadClient(
 
         return trustManagerFactory.trustManagers
             .filterIsInstance<X509TrustManager>()
-            .single()
+            .singleOrNull()
+            ?: error("PocketPad X509TrustManager was not created")
     }
 
-    private fun createSslContext(trustManager: X509TrustManager): SSLContext {
+    private fun createPocketPadSslContext(trustManager: X509TrustManager): SSLContext {
         return SSLContext.getInstance("TLS").apply {
-            init(null, arrayOf<TrustManager>(trustManager), SecureRandom())
+            init(
+                null,
+                arrayOf(trustManager),
+                SecureRandom()
+            )
         }
     }
 
-    private fun createSecureHttpClient(): OkHttpClient {
+    // Fail visibly if TLS / trust configuration is broken, never fall back to plain client
+    private val okHttpClient: OkHttpClient by lazy {
         val trustManager = createPocketPadTrustManager()
-        val sslContext = createSslContext(trustManager)
-        val sslSocketFactory = sslContext.socketFactory
+        val sslContext = createPocketPadSslContext(trustManager)
 
-        return OkHttpClient.Builder()
-            .sslSocketFactory(sslSocketFactory, trustManager)
+        OkHttpClient.Builder()
+            .sslSocketFactory(
+                sslContext.socketFactory,
+                trustManager
+            )
             .connectTimeout(3, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .writeTimeout(0, TimeUnit.MILLISECONDS)
             .retryOnConnectionFailure(true)
             .build()
-    }
-
-    // Fail visibly if TLS / trust configuration is broken, never fall back to plain client
-    private val okHttpClient: OkHttpClient by lazy {
-        createSecureHttpClient()
     }
 
     private var webSocket: WebSocket? = null
