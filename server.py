@@ -195,6 +195,34 @@ def consume_pairing_token(token: str) -> bool:
     return time.monotonic() < expiry
 
 
+# Desktop session tokens (short-lived, one-time, loopback-only)
+DESKTOP_SESSION_TTL = 300.0
+DESKTOP_SESSIONS: dict[str, float] = {}
+
+
+def create_desktop_session() -> str:
+    """Generate a short-lived one-time desktop session token (5 min TTL)."""
+    session = secrets.token_urlsafe(32)
+    DESKTOP_SESSIONS[session] = (
+        time.monotonic()
+        + DESKTOP_SESSION_TTL
+    )
+    return session
+
+
+def consume_desktop_session(
+    session: str,
+) -> bool:
+    """Validate and immediately invalidate a desktop session token."""
+    expiry = DESKTOP_SESSIONS.pop(
+        session,
+        None,
+    )
+    if expiry is None:
+        return False
+    return time.monotonic() < expiry
+
+
 def send_security_headers(handler: SimpleHTTPRequestHandler):
     """Inject standard security response headers."""
     handler.send_header("X-Content-Type-Options", "nosniff")
@@ -408,7 +436,41 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
             self.wfile.write(png_bytes)
             return
 
-        # 7. Static Web Assets
+        # 7. Desktop Session Exchange (loopback-only, one-time, 5-min TTL)
+        elif self.path.startswith("/desktop-session"):
+            if not self._is_loopback_client():
+                self.send_error(
+                    403,
+                    "Desktop session is loopback-only.",
+                )
+                return
+
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+
+            session = params.get(
+                "session",
+                [None],
+            )[0]
+
+            if not session:
+                self.send_json(
+                    {"ok": False, "error": "missing_session"},
+                    status=400,
+                )
+                return
+
+            if not consume_desktop_session(session):
+                self.send_json(
+                    {"ok": False, "error": "invalid_or_expired_session"},
+                    status=401,
+                )
+                return
+
+            self.send_json({"ok": True, "authenticated": True})
+            return
+
+        # 8. Static Web Assets
         super().do_GET()
 
     def log_message(self, format, *args):

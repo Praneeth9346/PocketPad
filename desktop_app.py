@@ -23,7 +23,7 @@ import pystray
 import webview
 from PIL import Image, ImageDraw
 
-from server import EXPECTED_TOKEN, HTTP_PORT
+from server import EXPECTED_TOKEN, HTTP_PORT, create_desktop_session
 from server import main as run_server
 from usb_setup import setup_usb_reverse_forwarding
 
@@ -137,7 +137,9 @@ def setup_tray():
 def start_webview():
     global main_window
     api = DesktopAPI()
-    url = f"http://127.0.0.1:{HTTP_PORT}/desktop.html?token={EXPECTED_TOKEN}"
+    # Generate a short-lived, one-time session token — never expose the master token in a URL.
+    desktop_session = create_desktop_session()
+    url = f"http://127.0.0.1:{HTTP_PORT}/desktop.html?session={desktop_session}"
 
     main_window = webview.create_window(
         title="PocketPad Host & Control Center",
