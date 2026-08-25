@@ -157,14 +157,14 @@ class GamepadBridge:
                 self.gamepad.register_notification(callback_function=_internal_rumble)
 
                 self.reset()
-                print("[GamepadBridge] ⚡ Native C-Speed Xbox 360 Gamepad Engine Active (High Priority 1ms).")
+                print("[GamepadBridge] Native C-Speed Xbox 360 Gamepad Engine Active (High Priority 1ms).")
             except Exception as e:
                 self.controller_error = str(e)
-                print(f"[GamepadBridge] ❌ Failed to create ViGEm Xbox 360 controller: {e}")
-                print("[GamepadBridge] ⚠️ Install ViGEmBus driver: https://github.com/nefarius/ViGEmBus/releases")
+                print(f"[GamepadBridge] Failed to create ViGEm Xbox 360 controller: {e}")
+                print("[GamepadBridge] Install ViGEmBus driver: https://github.com/nefarius/ViGEmBus/releases")
         else:
             self.controller_error = "vgamepad module not installed"
-            print("[GamepadBridge] ⚠️ vgamepad not available — controller output disabled.")
+            print("[GamepadBridge] vgamepad not available — controller output disabled.")
 
     def reset(self):
         """Reset all inputs to neutral state."""
