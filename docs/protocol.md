@@ -53,6 +53,7 @@ The first frame sent by the client upon establishing a WebSocket connection **MU
 | `0x08` | Media Key | 2 bytes | `[uint8 0x08, uint8 vk_key_code]` |
 | `0x09` | Ping Echo Probe | 5 bytes | `[uint8 0x09, uint32 timestamp]` |
 | `0x11` | Demo Mode Toggle | 1 byte | `[uint8 0x11]` |
+| `0x20` | Latency Probe | 13 bytes | `[uint8 0x20, uint32 seq, int64 timestamp_ns]` |
 
 ---
 
@@ -62,7 +63,7 @@ The first frame sent by the client upon establishing a WebSocket connection **MU
 |:---|:---|:---:|:---|
 | `0x0A` | Pong Echo Response | 5 bytes | `[uint8 0x0A, uint32 timestamp]` |
 | `0x0B` | Force Feedback Rumble | 3 bytes | `[uint8 0x0B, uint8 large_motor, uint8 small_motor]` |
-| `0x10` | Game Telemetry Feed | 13 bytes | `[uint8 0x10, int16 rpm, int16 max_rpm, int16 speed_x10, uint8 gear, uint8 shift_pct, uint8 slip_pct, uint8 accel, uint8 brake, uint8 boost]` |
+| `0x20` | Latency Probe Echo | 13 bytes | `[uint8 0x20, uint32 seq, int64 timestamp_ns]` |
 
 ---
 
