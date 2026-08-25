@@ -62,3 +62,17 @@ def test_server_certificate_is_not_ca():
     server_cert = x509.load_pem_x509_certificate(SERVER_CERT_FILE.read_bytes())
     basic_constraints = server_cert.extensions.get_extension_for_class(x509.BasicConstraints).value
     assert basic_constraints.ca is False
+
+
+def test_certificate_matches_ips_validation():
+    from ssl_helper import certificate_matches_ips, ensure_server_certificate
+
+    server_cert = x509.load_pem_x509_certificate(SERVER_CERT_FILE.read_bytes())
+    assert certificate_matches_ips(server_cert, ["127.0.0.1", "192.168.1.100"])
+    # Not matching when a new IP is required
+    assert not certificate_matches_ips(server_cert, ["10.200.1.50"])
+
+    # Test ensure_server_certificate regenerates when IPs change
+    ensure_server_certificate(["127.0.0.1", "10.200.1.50"])
+    new_cert = x509.load_pem_x509_certificate(SERVER_CERT_FILE.read_bytes())
+    assert certificate_matches_ips(new_cert, ["10.200.1.50"])

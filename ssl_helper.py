@@ -7,7 +7,6 @@ import ipaddress
 import os
 import socket
 import ssl
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,14 +15,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
-
-def get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).parent
-
-
-BASE_DIR = get_base_dir()
+from paths import BASE_DIR
 
 CA_KEY_FILE = BASE_DIR / "pocketpad_ca_key.pem"
 CA_CERT_FILE = BASE_DIR / "pocketpad_ca_cert.pem"
@@ -201,10 +193,54 @@ def generate_server_certificate(local_ips: list[str] | None = None) -> None:
     secure_file(SERVER_CERT_FILE)
 
 
+def certificate_matches_ips(
+    certificate: x509.Certificate,
+    local_ips: list[str],
+) -> bool:
+    """Check if the certificate SANs contain all required IPs and localhost."""
+    required = {
+        "localhost",
+        "127.0.0.1",
+        *local_ips,
+    }
+
+    try:
+        san = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound:
+        return False
+
+    present: set[str] = set()
+
+    for entry in san:
+        if isinstance(entry, x509.DNSName):
+            present.add(entry.value)
+        elif isinstance(entry, x509.IPAddress):
+            present.add(str(entry.value))
+
+    return required.issubset(present)
+
+
+def ensure_server_certificate(
+    local_ips: list[str],
+) -> None:
+    """Ensure valid server certificate exists and matches current IPs."""
+    generate_ca()
+
+    if not SERVER_CERT_FILE.exists() or not SERVER_KEY_FILE.exists():
+        generate_server_certificate(local_ips)
+        return
+
+    try:
+        certificate = x509.load_pem_x509_certificate(SERVER_CERT_FILE.read_bytes())
+        if not certificate_matches_ips(certificate, local_ips):
+            generate_server_certificate(local_ips)
+    except Exception:
+        generate_server_certificate(local_ips)
+
+
 def get_ssl_context(local_ip: str = "127.0.0.1") -> ssl.SSLContext:
     """Get or generate a stable TLS 1.2+ SSL context signed by PocketPad CA."""
-    if not SERVER_CERT_FILE.exists() or not SERVER_KEY_FILE.exists() or not CA_CERT_FILE.exists():
-        generate_server_certificate(get_all_local_ips())
+    ensure_server_certificate(get_all_local_ips())
 
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2

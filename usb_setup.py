@@ -1,19 +1,12 @@
 import os
 import shutil
 import subprocess
-import sys
 import urllib.request
 import zipfile
 from pathlib import Path
 
+from paths import BASE_DIR
 
-def get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).parent
-
-
-BASE_DIR = get_base_dir()
 ADB_DIR = BASE_DIR / "adb_tools"
 ADB_EXE = ADB_DIR / "platform-tools" / "adb.exe"
 

@@ -17,8 +17,11 @@ import qrcode
 import websockets
 
 from controller_bridge import GamepadBridge
+from paths import BASE_DIR, get_base_dir
 from ssl_helper import get_all_local_ips, get_ssl_context
 from usb_setup import setup_usb_reverse_forwarding
+
+__all__ = ["get_base_dir", "GamepadServer", "EXPECTED_TOKEN", "PROTOCOL_VERSION", "is_usb_client"]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("PocketPad")
@@ -40,14 +43,6 @@ ALLOWED_CORS_ORIGINS = {
     "https://127.0.0.1",
 }
 
-
-def get_base_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).parent
-
-
-BASE_DIR = get_base_dir()
 TOKEN_FILE = BASE_DIR / ".pocketpad_token"
 
 
@@ -144,6 +139,54 @@ def get_primary_ip():
     finally:
         s.close()
     return ip
+
+
+USB_LOOPBACK_HOSTS = {
+    "127.0.0.1",
+    "::1",
+    "localhost",
+}
+
+
+def is_usb_client(client_ip: str) -> bool:
+    """Check if the client IP is a USB loopback or tethering address."""
+    return client_ip in USB_LOOPBACK_HOSTS or client_ip.startswith(("10.18.", "192.168.42.", "172.20."))
+
+
+def get_connection_endpoints() -> dict:
+    """Return explicit connection endpoint configurations for USB and Wi-Fi."""
+    primary_ip = get_primary_ip()
+    return {
+        "usb": {
+            "host": "127.0.0.1",
+            "https_port": HTTPS_PORT,
+            "url": f"https://127.0.0.1:{HTTPS_PORT}",
+        },
+        "wifi": {
+            "host": primary_ip,
+            "https_port": HTTPS_PORT,
+            "url": f"https://{primary_ip}:{HTTPS_PORT}",
+        },
+    }
+
+
+PAIRING_TTL = 120.0
+PAIRING_TOKENS: dict[str, float] = {}
+
+
+def create_pairing_token() -> str:
+    """Generate a short-lived, single-use pairing token for QR code exchange."""
+    token = secrets.token_urlsafe(24)
+    PAIRING_TOKENS[token] = time.monotonic() + PAIRING_TTL
+    return token
+
+
+def consume_pairing_token(token: str) -> bool:
+    """Validate and immediately invalidate a single-use pairing token."""
+    expiry = PAIRING_TOKENS.pop(token, None)
+    if expiry is None:
+        return False
+    return time.monotonic() < expiry
 
 
 def send_security_headers(handler: SimpleHTTPRequestHandler):
@@ -272,8 +315,8 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
         elif self.path.startswith("/api/rotate_token"):
             if not require_auth(self):
                 return
-            new_token = rotate_token()
-            res = {"ok": True, "token": new_token}
+            rotate_token()
+            res = {"ok": True, "rotated": True}
             self.send_response(200)
             send_security_headers(self)
             self.send_header("Content-Type", "application/json")
@@ -281,12 +324,30 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(res).encode("utf-8"))
             return
 
-        # 5. Connection QR Code Image (Protected)
+        # 5. Pairing Code Exchange API
+        elif self.path.startswith("/pair") or self.path.startswith("/api/pair"):
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+            code = params.get("code", "")
+            if code and consume_pairing_token(code):
+                res = {"ok": True, "token": EXPECTED_TOKEN}
+                self.send_response(200)
+            else:
+                res = {"ok": False, "error": "Invalid or expired pairing code"}
+                self.send_response(403)
+            send_security_headers(self)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+            return
+
+        # 6. Connection QR Code Image (Protected)
         elif self.path.startswith("/api/qr"):
             if not require_auth(self):
                 return
             primary_ip = get_primary_ip()
-            qr_url = f"https://{primary_ip}:{HTTPS_PORT}?token={EXPECTED_TOKEN}"
+            pairing_code = create_pairing_token()
+            qr_url = f"https://{primary_ip}:{HTTPS_PORT}/pair?code={pairing_code}"
             qr = qrcode.QRCode(border=1)
             qr.add_data(qr_url)
             qr.make(fit=True)
@@ -302,7 +363,7 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
             self.wfile.write(png_bytes)
             return
 
-        # 6. Static Web Assets
+        # 7. Static Web Assets
         super().do_GET()
 
     def log_message(self, format, *args):
@@ -330,7 +391,7 @@ def run_https_server(ssl_ctx):
 
 def print_banner(primary_ip: str, all_ips: list, usb_status: str, adb_active: bool):
     """Print ASCII QR Code and direct connection links."""
-    https_primary = f"https://{primary_ip}:{HTTPS_PORT}"
+    endpoints = get_connection_endpoints()
 
     print("\n" + "=" * 68)
     print("   🏎️  POCKETPAD - NATIVE C-SPEED FORZA RACING SERVER 🎮")
@@ -342,19 +403,21 @@ def print_banner(primary_ip: str, all_ips: list, usb_status: str, adb_active: bo
         print(f"  👉 Open on phone:  https://localhost:{HTTPS_PORT}  (or http://localhost:{HTTP_PORT})")
     else:
         print(f"  ★ USB Status: {usb_status}")
+    print(f"  👉 USB:                                     {endpoints['usb']['url']}")
     for ip in all_ips:
         if ip != "127.0.0.1" and ip.startswith(("10.18.", "192.168.42.", "172.20.")):
             print(f"  👉 USB Tethering Direct URL:                https://{ip}:{HTTPS_PORT}")
 
     print("\n[ 📶 METHOD A: WIRELESS 5GHz WI-FI MODE (WMM QoS) ]")
+    print(f"  👉 Wi-Fi:                                   {endpoints['wifi']['url']}")
     for ip in all_ips:
-        if ip != "127.0.0.1" and not ip.startswith(("10.18.", "192.168.42.", "172.20.")):
-            print(f"  👉 Wi-Fi URL:                               https://{ip}:{HTTPS_PORT}")
+        if ip != "127.0.0.1" and not ip.startswith(("10.18.", "192.168.42.", "172.20.")) and ip != primary_ip:
+            print(f"  👉 Additional Wi-Fi URL:                    https://{ip}:{HTTPS_PORT}")
 
     print("\n--- Scan QR Code with Phone for Wireless Connection ---")
     try:
         qr = qrcode.QRCode(border=1)
-        qr.add_data(https_primary)
+        qr.add_data(endpoints["wifi"]["url"])
         qr.make(fit=True)
         f = io.StringIO()
         qr.print_ascii(out=f, invert=True)
@@ -520,7 +583,7 @@ class GamepadServer:
             """Upgrade a pending connection to a confirmed phone client."""
             info = self.client_infos.get(websocket)
             if info and not info["confirmed"]:
-                is_usb = client_ip in ("127.0.0.1", "::1") or client_ip.startswith(("10.18.", "192.168.42.", "172.20."))
+                is_usb = is_usb_client(client_ip)
                 info["is_usb"] = is_usb
                 info["label"] = "USB Wired" if is_usb else "Wireless Wi-Fi (WMM QoS)"
                 info["confirmed"] = True
