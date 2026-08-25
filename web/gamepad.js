@@ -78,6 +78,7 @@
   let steeringSensitivity = 2.89; // Multiplier (2.89x turns in-game wheel 260° at 90° physical tilt)
   let steeringDeadzone = 0.00; // 0% phone sensor tremor deadzone
   let antiDeadzone = 0.20; // 20% Game Deadband Bypass (Instantly eliminates Forza's inside deadzone)
+  let steeringActive = false; // hysteresis latch — prevents 0%/antiDeadzone chatter at rest
   let pedalMode = 'analog';
   let accumulatedWheelAngle = 0.0;
   let lastRawPlanar = null;
@@ -512,29 +513,42 @@
       sensorDebugText.textContent = `Physical Tilt: ${smoothedAngle.toFixed(1)}° / ${maxSteeringAngle}° | Lock: ${lockPct}% | 240Hz`;
     }
 
-    // Map to Normalized Controller Output [-1.0 to +1.0] with Exact Physical Linearity:
+    // Map to Normalized Controller Output [-1.0 to +1.0]
     let norm = (smoothedAngle / Math.max(15, maxSteeringAngle)) * steeringSensitivity;
     norm = Math.max(-1.0, Math.min(1.0, norm));
 
-    // Phone Sensor Tremor Guard
-    if (steeringDeadzone > 0 && Math.abs(norm) < steeringDeadzone) {
+    const sign = Math.sign(norm);
+    let mag = Math.abs(norm);
+
+    // Effective deadzone: never literally 0, so there's always a real gap to hold in
+    const effectiveDeadzone = Math.max(steeringDeadzone, 0.01);
+    const engageAt  = effectiveDeadzone;        // must exceed this to START steering
+    const releaseAt = effectiveDeadzone * 0.5;  // must drop below this to STOP steering
+
+    // Schmitt-trigger latch: crossing engageAt turns steering on; only dropping
+    // below the lower releaseAt turns it back off. Noise sitting near one fixed
+    // threshold can no longer cause rapid on/off toggling.
+    if (steeringActive) {
+      if (mag < releaseAt) steeringActive = false;
+    } else {
+      if (mag > engageAt) steeringActive = true;
+    }
+
+    if (!steeringActive) {
       norm = 0.0;
     } else {
       // S-Curve Linearity
       if (steeringCurveExponent !== 1.0) {
-        const sign = Math.sign(norm);
-        const mag = Math.abs(norm);
-        norm = sign * Math.pow(mag, steeringCurveExponent);
+        mag = Math.pow(mag, steeringCurveExponent);
       }
 
-      // 🔥 ANTI-DEADZONE (GAME DEADBAND BYPASS):
-      // Punches straight through Forza Horizon's / game's built-in 20% deadzone!
-      if (antiDeadzone > 0 && Math.abs(norm) > 0.0001) {
-        const sign = Math.sign(norm);
-        const mag = Math.abs(norm);
-        norm = sign * (antiDeadzone + (1.0 - antiDeadzone) * mag);
-        norm = Math.max(-1.0, Math.min(1.0, norm));
+      // ANTI-DEADZONE (game deadband bypass) — now only fires once the latch
+      // is genuinely on, so it can't flicker on its own.
+      if (antiDeadzone > 0) {
+        mag = antiDeadzone + (1.0 - antiDeadzone) * mag;
       }
+
+      norm = sign * Math.max(-1.0, Math.min(1.0, mag));
     }
 
     currentSteerX = norm;
@@ -550,6 +564,7 @@
     calibratedCenter = latestRawAngle;
     manualTrimOffset = 0.0;
     smoothedAngle = 0.0;
+    steeringActive = false;
     currentSteerX = 0.0;
     lastSentSteerX = 999.0;
 

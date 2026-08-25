@@ -43,6 +43,7 @@ class MotionSensorManager(
 
     private var smoothedAngle: Float = 0f
     private var latestRawAngle: Float = 0f
+    private var steeringActive: Boolean = false // Hysteresis latch to prevent 0%/antiDeadzone chatter
 
     fun start() {
         if (isEnabled || accelerometer == null || sensorManager == null) return
@@ -62,6 +63,7 @@ class MotionSensorManager(
         sensorManager?.unregisterListener(this)
         smoothedAngle = 0f
         latestRawAngle = 0f
+        steeringActive = false
         onSteeringUpdated(0f, 0f, 0f)
     }
 
@@ -69,6 +71,7 @@ class MotionSensorManager(
         calibratedCenter = latestRawAngle
         manualTrimOffset = 0f
         smoothedAngle = 0f
+        steeringActive = false
         onSteeringUpdated(0f, 0f, 0f)
     }
 
@@ -144,24 +147,38 @@ class MotionSensorManager(
         var norm = (smoothedAngle / safeMaxAngle) * steeringSensitivity
         norm = max(-1.0f, min(1.0f, norm))
 
-        // Phone Sensor Tremor Guard
-        if (sensorDeadzone > 0f && abs(norm) < sensorDeadzone) {
-            norm = 0f
+        val signVal = sign(norm)
+        var mag = abs(norm)
+
+        // Effective deadzone: never literally 0, so there's always a real gap to hold in
+        val effectiveDeadzone = max(sensorDeadzone, 0.01f)
+        val engageAt = effectiveDeadzone        // must exceed this to START steering
+        val releaseAt = effectiveDeadzone * 0.5f // must drop below this to STOP steering
+
+        // Schmitt-trigger latch: crossing engageAt turns steering on; only dropping
+        // below the lower releaseAt turns it back off. Noise sitting near one fixed
+        // threshold can no longer cause rapid on/off toggling.
+        if (steeringActive) {
+            if (mag < releaseAt) steeringActive = false
+        } else {
+            if (mag > engageAt) steeringActive = true
+        }
+
+        if (!steeringActive) {
+            norm = 0.0f
         } else {
             // S-Curve Linearity
             if (curveExponent != 1.0f) {
-                val s = sign(norm)
-                val mag = abs(norm)
-                norm = s * Math.pow(mag.toDouble(), curveExponent.toDouble()).toFloat()
+                mag = Math.pow(mag.toDouble(), curveExponent.toDouble()).toFloat()
             }
 
-            // Anti-Deadzone (Game Deadband Bypass)
-            if (antiDeadzone > 0f && abs(norm) > 0.0001f) {
-                val s = sign(norm)
-                val mag = abs(norm)
-                norm = s * (antiDeadzone + (1.0f - antiDeadzone) * mag)
-                norm = max(-1.0f, min(1.0f, norm))
+            // ANTI-DEADZONE (game deadband bypass) — now only fires once the latch
+            // is genuinely on, so it can't flicker on its own.
+            if (antiDeadzone > 0f) {
+                mag = antiDeadzone + (1.0f - antiDeadzone) * mag
             }
+
+            norm = signVal * max(-1.0f, min(1.0f, mag))
         }
 
         onSteeringUpdated(norm, displayAngle, smoothedAngle)
