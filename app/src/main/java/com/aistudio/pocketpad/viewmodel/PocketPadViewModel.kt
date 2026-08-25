@@ -13,9 +13,11 @@ import com.aistudio.pocketpad.model.ButtonId
 import com.aistudio.pocketpad.model.ConnectionState
 import com.aistudio.pocketpad.model.PadMode
 import com.aistudio.pocketpad.model.PedalMode
+import com.aistudio.pocketpad.model.PocketPadConnection
 import com.aistudio.pocketpad.model.PocketPadSettings
 import com.aistudio.pocketpad.model.SpeedUnit
 import com.aistudio.pocketpad.model.TelemetryData
+import com.aistudio.pocketpad.model.parsePocketPadUrl
 import com.aistudio.pocketpad.network.GamepadClient
 import com.aistudio.pocketpad.sensor.MotionSensorManager
 import kotlinx.coroutines.Job
@@ -527,6 +529,21 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun connectToServer(ip: String, port: Int = 8765, token: String = "") {
+        val parsed = parsePocketPadUrl(ip.trim())
+        if (parsed != null) {
+            isIntentionalDisconnect = false
+            updateSettings { it.copy(serverIp = parsed.host, serverPort = parsed.port, authToken = parsed.token) }
+            client.connect(
+                host = parsed.host,
+                port = parsed.port,
+                token = parsed.token,
+                isHttps = parsed.secure
+            )
+            startPingJob()
+            return
+        }
+
+        // Fallback for manual IP & Port entry
         var rawInput = ip.trim()
         var extractedToken = token.trim()
 
@@ -573,7 +590,10 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         client.connect(finalIp, wsPort, extractedToken, isHttps)
+        startPingJob()
+    }
 
+    private fun startPingJob() {
         pingJob?.cancel()
         pingJob = viewModelScope.launch {
             while (isActive) {

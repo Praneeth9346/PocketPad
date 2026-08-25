@@ -104,3 +104,45 @@ data class PocketPadSettings(
     val wheelOffsetX: Float = 0f, // Draggable horizontal offset (-60dp..60dp)
     val wheelOffsetY: Float = 0f // Draggable vertical offset (-40dp..40dp)
 )
+
+data class PocketPadConnection(
+    val host: String,
+    val port: Int,
+    val token: String,
+    val secure: Boolean
+)
+
+fun parsePocketPadUrl(rawUrl: String): PocketPadConnection? {
+    return try {
+        val uri = android.net.Uri.parse(rawUrl.trim())
+
+        val scheme = uri.scheme?.lowercase()
+        val secure = scheme == "https" || scheme == "wss"
+
+        if (scheme != "https" && scheme != "http" && scheme != "wss" && scheme != "ws") {
+            return null
+        }
+
+        val host = uri.host ?: return null
+        val token = uri.getQueryParameter("token")
+            ?.trim()
+            .orEmpty()
+
+        if (token.isEmpty()) return null
+
+        PocketPadConnection(
+            host = host,
+            port = if (secure) {
+                // WebSocket secure port, not HTTPS UI port
+                8766
+            } else {
+                // WebSocket standard port, not HTTP UI port
+                8765
+            },
+            token = token,
+            secure = secure
+        )
+    } catch (_: Exception) {
+        null
+    }
+}
