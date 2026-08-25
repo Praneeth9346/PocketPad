@@ -11,7 +11,10 @@ if sys.platform == "win32":
     except AttributeError:
         pass
 
+import json
 import websockets
+
+from server import EXPECTED_TOKEN
 
 WS_URI = "ws://127.0.0.1:8765"
 
@@ -20,7 +23,11 @@ async def run_network_benchmark():
     
     try:
         async with websockets.connect(WS_URI) as ws:
-            print("[TestClient] Connected successfully!")
+            print("[TestClient] Connected! Sending authentication hello...")
+            await ws.send(json.dumps({"type": "hello", "token": EXPECTED_TOKEN}))
+            ack_raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+            ack = json.loads(ack_raw)
+            print(f"[TestClient] Handshake acknowledged: {ack}")
 
             # 1. Binary Ping / Latency Benchmark
             print("\n--- [1/6] Benchmarking High-Speed Binary Packet Latency ---")
