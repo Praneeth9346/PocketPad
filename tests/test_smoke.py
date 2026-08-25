@@ -1,5 +1,8 @@
-import asyncio
+from unittest.mock import patch
+
 import pytest
+
+import controller_bridge
 from smoke_test import SmokeTestRunner
 
 
@@ -15,8 +18,9 @@ def test_tls_and_token_smoke():
 
 @pytest.mark.asyncio
 async def test_websocket_protocol_smoke():
-    runner = SmokeTestRunner()
-    await runner.test_websocket_handshake_and_protocol()
+    with patch.object(controller_bridge, "VGAMEPAD_AVAILABLE", False):
+        runner = SmokeTestRunner()
+        await runner.test_websocket_handshake_and_protocol()
 
-    for item, (passed, detail) in runner.results.items():
-        assert passed, f"Smoke test failed on '{item}': {detail}"
+        for item, (passed, detail) in runner.results.items():
+            assert passed, f"Smoke test failed on '{item}': {detail}"

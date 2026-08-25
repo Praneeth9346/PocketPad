@@ -34,24 +34,39 @@ android {
                 val keystoreProperties = Properties().apply {
                     load(FileInputStream(keystorePropertiesFile))
                 }
+
                 val storeFilePath = keystoreProperties.getProperty("storeFile")
-                    ?: error("storeFile missing from keystore.properties")
-                storeFile = rootProject.file(storeFilePath)
-                check(storeFile?.exists() == true) {
-                    "Release keystore not found: ${storeFile?.absolutePath}"
+                    ?: error("storeFile is missing from keystore.properties")
+                val storePassword = keystoreProperties.getProperty("storePassword")
+                    ?: error("storePassword is missing from keystore.properties")
+                val keyAlias = keystoreProperties.getProperty("keyAlias")
+                    ?: error("keyAlias is missing from keystore.properties")
+                val keyPassword = keystoreProperties.getProperty("keyPassword")
+                    ?: error("keyPassword is missing from keystore.properties")
+
+                val keystoreFile = rootProject.file(storeFilePath)
+                check(keystoreFile.exists()) {
+                    "Release keystore does not exist: ${keystoreFile.absolutePath}"
                 }
-                storePassword = keystoreProperties.getProperty("storePassword")
-                    ?: error("storePassword missing from keystore.properties")
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                    ?: error("keyAlias missing from keystore.properties")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
-                    ?: error("keyPassword missing from keystore.properties")
-            } else {
-                // Fallback to local debug keystore for development builds
-                storeFile = file("${rootDir}/debug.keystore")
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
+
+                storeFile = keystoreFile
+                this.storePassword = storePassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
+            }
+        }
+    }
+
+    gradle.taskGraph.whenReady {
+        if (hasTask(":app:assembleRelease") || hasTask(":app:packageRelease")) {
+            val keystorePropertiesFile = rootProject.file("keystore.properties")
+            check(keystorePropertiesFile.exists()) {
+                """
+                Missing keystore.properties.
+
+                Production release builds require a signing keystore.
+                Create keystore.properties locally or provide it through CI secrets.
+                """.trimIndent()
             }
         }
     }
@@ -59,11 +74,12 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
         }
         debug {
             signingConfig = signingConfigs.getByName("debug")

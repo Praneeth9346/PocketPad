@@ -1,4 +1,4 @@
-from server import _token_matches, EXPECTED_TOKEN
+from server import EXPECTED_TOKEN, _token_matches
 
 
 def test_valid_token():

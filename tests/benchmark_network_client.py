@@ -6,21 +6,23 @@ import time
 
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
 
 import json
+
 import websockets
 
 from server import EXPECTED_TOKEN
 
 WS_URI = "ws://127.0.0.1:8765"
 
+
 async def run_network_benchmark():
     print(f"[TestClient] Connecting to Gamepad WebSocket server at {WS_URI}...")
-    
+
     try:
         async with websockets.connect(WS_URI) as ws:
             print("[TestClient] Connected! Sending authentication hello...")
@@ -77,7 +79,7 @@ async def run_network_benchmark():
 
             # 4. Binary Shifter & Button Speed
             print("\n--- [4/6] Testing Buttons (A, B, X, Y) ---")
-            buttons = [0, 1, 2, 3] # A, B, X, Y
+            buttons = [0, 1, 2, 3]  # A, B, X, Y
             for btn_idx in buttons:
                 await ws.send(struct.pack("<BBB", 0x03, btn_idx, 1))
                 await asyncio.sleep(0.02)
@@ -89,7 +91,7 @@ async def run_network_benchmark():
             for i in range(5):
                 dx = 15
                 dy = -5
-                btns = 0x01 if i == 2 else 0x00 # Left click on 3rd iteration
+                btns = 0x01 if i == 2 else 0x00  # Left click on 3rd iteration
                 pkt = struct.pack("<BhhB", 0x07, dx, dy, btns)
                 await ws.send(pkt)
                 print(f" -> Sent Mouse Delta dx={dx}, dy={dy}, btns={btns}")
@@ -108,6 +110,7 @@ async def run_network_benchmark():
 
     except Exception as e:
         print(f"[!] Benchmark failed with error: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(run_network_benchmark())

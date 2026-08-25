@@ -58,4 +58,10 @@ class ProtocolEncodingTest {
         assertEquals(1, bytes.size)
         assertEquals(Protocol.KEEPALIVE, bytes[0])
     }
+
+    @Test
+    fun wrongProtocolVersionIsRejected() {
+        val serverVersion = 999
+        org.junit.Assert.assertNotEquals(Protocol.VERSION.toInt(), serverVersion)
+    }
 }

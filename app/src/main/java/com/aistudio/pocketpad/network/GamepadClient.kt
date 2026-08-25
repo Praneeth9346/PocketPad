@@ -1,5 +1,6 @@
 package com.aistudio.pocketpad.network
 
+import android.content.Context
 import com.aistudio.pocketpad.model.ButtonId
 import com.aistudio.pocketpad.model.ConnectionState
 import com.aistudio.pocketpad.model.TelemetryData
@@ -13,58 +14,59 @@ import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.KeyStore
 import java.security.SecureRandom
-import java.security.cert.CertificateException
-import java.security.cert.X509Certificate
+import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
+import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
+import kotlin.math.roundToInt
 
 class GamepadClient(
+    private val context: Context,
     private val onConnectionStateChanged: (ConnectionState) -> Unit,
     private val onPingMeasured: (Float) -> Unit,
     private val onTelemetryReceived: (TelemetryData) -> Unit,
     private val onRumbleReceived: ((Float, Float) -> Unit)? = null
 ) {
-    private val okHttpClient: OkHttpClient = try {
-        val pocketPadTrustManager = object : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
-                if (chain == null || chain.isEmpty()) {
-                    throw CertificateException("Server certificate chain is empty")
-                }
-                val leafCert = chain[0]
-                leafCert.checkValidity()
-
-                val subject = leafCert.subjectX500Principal.name
-                val issuer = leafCert.issuerX500Principal.name
-                val isPocketPadCert = subject.contains("PocketPad", ignoreCase = true) ||
-                                     issuer.contains("PocketPad", ignoreCase = true)
-
-                if (!isPocketPadCert) {
-                    throw CertificateException("Untrusted certificate: Not issued for PocketPad server ($subject)")
-                }
+    private fun createPocketPadTrustManager(): X509TrustManager {
+        val certificateFactory = CertificateFactory.getInstance("X.509")
+        val certificate = context.applicationContext.resources
+            .openRawResource(com.aistudio.pocketpad.R.raw.pocketpad_ca)
+            .use {
+                certificateFactory.generateCertificate(it)
             }
-            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+
+        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
+            load(null, null)
+            setCertificateEntry("pocketpad-ca", certificate)
         }
 
-        val sslContext = SSLContext.getInstance("TLS")
-        sslContext.init(null, arrayOf<TrustManager>(pocketPadTrustManager), SecureRandom())
+        val trustManagerFactory = TrustManagerFactory.getInstance(
+            TrustManagerFactory.getDefaultAlgorithm()
+        )
+        trustManagerFactory.init(keyStore)
+
+        return trustManagerFactory.trustManagers
+            .filterIsInstance<X509TrustManager>()
+            .single()
+    }
+
+    private fun createSslContext(trustManager: X509TrustManager): SSLContext {
+        return SSLContext.getInstance("TLS").apply {
+            init(null, arrayOf<TrustManager>(trustManager), SecureRandom())
+        }
+    }
+
+    private val okHttpClient: OkHttpClient = try {
+        val trustManager = createPocketPadTrustManager()
+        val sslContext = createSslContext(trustManager)
         val sslSocketFactory = sslContext.socketFactory
 
         OkHttpClient.Builder()
-            .sslSocketFactory(sslSocketFactory, pocketPadTrustManager)
-            .hostnameVerifier { hostname, _ ->
-                if (hostname.isNullOrBlank()) return@hostnameVerifier false
-                val isLocalHost = hostname == "localhost" ||
-                                 hostname == "127.0.0.1" ||
-                                 hostname == "10.0.2.2" ||
-                                 hostname.startsWith("192.168.") ||
-                                 hostname.startsWith("10.") ||
-                                 hostname.startsWith("172.")
-                isLocalHost
-            }
+            .sslSocketFactory(sslSocketFactory, trustManager)
             .connectTimeout(3, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .writeTimeout(0, TimeUnit.MILLISECONDS)
@@ -87,6 +89,12 @@ class GamepadClient(
 
     private var connectionGeneration: Long = 0L
     private var lastPingSendTimeNs: Long = 0L
+
+    // Packet rate monitoring
+    private var packetsSent = 0
+    private var lastRateTimeNs = System.nanoTime()
+    var packetsPerSecond: Int = 0
+        private set
 
     // Pre-allocated ByteBuffers for zero-allocation hot path
     private val steerBuffer = ByteBuffer.allocate(3).order(ByteOrder.LITTLE_ENDIAN)
@@ -128,276 +136,286 @@ class GamepadClient(
         onConnectionStateChanged(ConnectionState.CONNECTING)
 
         val protocol = if (isHttps) "wss" else "ws"
-        val url = "$protocol://$host:$port"
-
         val request = Request.Builder()
-            .url(url)
+            .url("$protocol://$host:$port")
             .build()
 
-        webSocket = okHttpClient.newWebSocket(
-            request,
-            object : WebSocketListener() {
-
-                override fun onOpen(
-                    webSocket: WebSocket,
-                    response: Response
-                ) {
-                    if (currentGeneration != connectionGeneration) return
-
-                    onConnectionStateChanged(ConnectionState.AUTHENTICATING)
-
-                    val hello = """
-                        {
-                          "type":"hello",
-                          "token":${JSONObject.quote(authToken)}
-                        }
-                    """.trimIndent()
-
-                    if (!webSocket.send(hello)) {
-                        webSocket.close(1011, "Failed to send authentication")
-                    }
-                }
-
-                override fun onMessage(
-                    webSocket: WebSocket,
-                    text: String
-                ) {
-                    if (currentGeneration != connectionGeneration) return
-                    handleIncomingText(text, host, webSocket)
-                }
-
-                override fun onMessage(
-                    webSocket: WebSocket,
-                    bytes: ByteString
-                ) {
-                    if (currentGeneration != connectionGeneration) return
-                    if (!authenticated) {
-                        webSocket.close(4003, "Binary data before authentication")
+        webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                synchronized(this@GamepadClient) {
+                    if (currentGeneration != connectionGeneration) {
+                        ws.close(1000, "Stale connection generation")
                         return
                     }
-
-                    handleIncomingBinary(bytes.toByteArray())
                 }
 
-                override fun onClosed(
-                    webSocket: WebSocket,
-                    code: Int,
-                    reason: String
-                ) {
+                onConnectionStateChanged(ConnectionState.AUTHENTICATING)
+
+                // Send authentication handshake
+                val helloMsg = JSONObject().apply {
+                    put("type", "hello")
+                    put("token", authToken)
+                }
+                ws.send(helloMsg.toString())
+            }
+
+            override fun onMessage(ws: WebSocket, text: String) {
+                synchronized(this@GamepadClient) {
                     if (currentGeneration != connectionGeneration) return
-                    isConnected = false
-                    authenticated = false
-                    onConnectionStateChanged(ConnectionState.DISCONNECTED)
                 }
 
-                override fun onFailure(
-                    webSocket: WebSocket,
-                    t: Throwable,
-                    response: Response?
-                ) {
-                    if (currentGeneration != connectionGeneration) return
-                    isConnected = false
-                    authenticated = false
-                    onConnectionStateChanged(ConnectionState.DISCONNECTED)
+                try {
+                    val json = JSONObject(text)
+                    when (json.optString("type")) {
+                        "hello_ack" -> {
+                            val serverVersion = json.optInt("version", -1)
+                            if (serverVersion != Protocol.VERSION) {
+                                ws.close(4000, "Unsupported protocol version: $serverVersion")
+                                onConnectionStateChanged(ConnectionState.ERROR)
+                                return
+                            }
+
+                            authenticated = true
+                            isConnected = true
+
+                            val isUsb = host == "127.0.0.1" || host == "localhost" || host == "10.0.2.2"
+                            if (isUsb) {
+                                onConnectionStateChanged(ConnectionState.CONNECTED_USB)
+                            } else {
+                                onConnectionStateChanged(ConnectionState.CONNECTED_WIFI)
+                            }
+                        }
+                        "error" -> {
+                            onConnectionStateChanged(ConnectionState.ERROR)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                synchronized(this@GamepadClient) {
+                    if (currentGeneration != connectionGeneration || !authenticated) return
+                }
+
+                val byteArray = bytes.toByteArray()
+                if (byteArray.isEmpty()) return
+
+                when (byteArray[0]) {
+                    Protocol.PONG -> {
+                        if (byteArray.size >= 5 && lastPingSendTimeNs > 0) {
+                            val rttMs = (System.nanoTime() - lastPingSendTimeNs) / 1_000_000f
+                            onPingMeasured(rttMs)
+                        }
+                    }
+                    Protocol.RUMBLE -> {
+                        if (byteArray.size >= 3) {
+                            val large = (byteArray[1].toInt() and 0xFF) / 255f
+                            val small = (byteArray[2].toInt() and 0xFF) / 255f
+                            onRumbleReceived?.invoke(large, small)
+                        }
+                    }
+                    Protocol.TELEMETRY -> {
+                        if (byteArray.size == Protocol.TELEMETRY_PACKET_SIZE) {
+                            val buffer = ByteBuffer.wrap(byteArray).order(ByteOrder.LITTLE_ENDIAN)
+                            buffer.get() // Opcode
+
+                            val rpm = buffer.short.toInt() and 0xFFFF
+                            val maxRpm = buffer.short.toInt() and 0xFFFF
+                            val speedMph = (buffer.short.toInt() and 0xFFFF) / 10f
+                            val speedKmh = speedMph * 1.60934f
+                            val gear = buffer.get().toInt() and 0xFF
+                            val shiftPct = ((buffer.get().toInt() and 0xFF) * 100 / 255)
+                            val slipPct = ((buffer.get().toInt() and 0xFF) * 100 / 255)
+                            val accel = buffer.get().toInt() and 0xFF
+                            val brake = buffer.get().toInt() and 0xFF
+                            val boostPsi = (buffer.get().toInt() and 0xFF) / 10f
+
+                            val telem = TelemetryData(
+                                currentRpm = rpm,
+                                maxRpm = maxRpm,
+                                speedMph = speedMph,
+                                speedKmh = speedKmh,
+                                gear = gear,
+                                shiftPct = shiftPct,
+                                slipPct = slipPct,
+                                accel = accel,
+                                brake = brake,
+                                boostPsi = boostPsi,
+                                isDrifting = slipPct > 30,
+                                isLive = true
+                            )
+                            onTelemetryReceived(telem)
+                        }
+                    }
                 }
             }
-        )
-    }
 
-    private fun handleIncomingText(text: String, host: String, ws: WebSocket) {
-        try {
-            val json = JSONObject(text)
-
-            when (json.optString("type")) {
-                "hello_ack" -> {
-                    val serverVersion = json.optInt("version", -1)
-                    if (serverVersion != Protocol.VERSION) {
-                        ws.close(4004, "Protocol mismatch: server=$serverVersion, client=${Protocol.VERSION}")
-                        onConnectionStateChanged(ConnectionState.ERROR)
-                        return
-                    }
-
-                    authenticated = true
-                    isConnected = true
-
-                    val isUsb =
-                        host == "127.0.0.1" ||
-                        host == "localhost" ||
-                        host.startsWith("10.18.")
-
-                    onConnectionStateChanged(
-                        if (isUsb) {
-                            ConnectionState.CONNECTED_USB
-                        } else {
-                            ConnectionState.CONNECTED_WIFI
-                        }
-                    )
-                }
-
-                "error" -> {
-                    authenticated = false
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                synchronized(this@GamepadClient) {
+                    if (currentGeneration != connectionGeneration) return
                     isConnected = false
+                    authenticated = false
+                }
+                onConnectionStateChanged(ConnectionState.DISCONNECTED)
+            }
+
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                synchronized(this@GamepadClient) {
+                    if (currentGeneration != connectionGeneration) return
+                    isConnected = false
+                    authenticated = false
+                }
+                if (code >= 4000) {
                     onConnectionStateChanged(ConnectionState.ERROR)
+                } else {
+                    onConnectionStateChanged(ConnectionState.DISCONNECTED)
                 }
             }
-        } catch (_: Exception) {
-            // Ignore malformed control messages.
-        }
+        })
     }
 
     @Synchronized
     fun disconnect() {
+        ++connectionGeneration
+        try {
+            webSocket?.close(1000, "Client initiated disconnect")
+        } catch (_: Exception) {}
+        webSocket = null
         isConnected = false
         authenticated = false
-        val ws = webSocket
-        webSocket = null
-        try {
-            ws?.close(1000, "User disconnected")
-        } catch (_: Exception) {}
-        onConnectionStateChanged(ConnectionState.DISCONNECTED)
     }
 
-    fun sendSteer(normX: Float) {
-        if (!isConnected || !authenticated) return
-        val clamped = normX.coerceIn(-1.0f, 1.0f)
-        val intVal = (clamped * 32767f).toInt().toShort()
-
-        synchronized(steerBuffer) {
-            steerBuffer.clear()
-            steerBuffer.put(Protocol.STEER)
-            steerBuffer.putShort(intVal)
-            webSocket?.send(steerBuffer.array().toByteString(0, 3))
+    private fun trackPacketSent() {
+        packetsSent++
+        val now = System.nanoTime()
+        val elapsed = (now - lastRateTimeNs) / 1_000_000_000.0
+        if (elapsed >= 1.0) {
+            packetsPerSecond = (packetsSent / elapsed).toInt()
+            packetsSent = 0
+            lastRateTimeNs = now
         }
+    }
+
+    fun sendSteer(normalized: Float) {
+        val clamped = normalized.coerceIn(-1.0f, 1.0f)
+        val shortVal = (clamped * 32767f).roundToInt().toShort()
+        sendSteering(shortVal)
+    }
+
+    fun sendSteering(steeringX: Short) {
+        if (!authenticated) return
+        steerBuffer.clear()
+        steerBuffer.put(Protocol.STEER)
+        steerBuffer.putShort(steeringX)
+        webSocket?.send(steerBuffer.array().toByteString())
+        trackPacketSent()
     }
 
     fun sendPedals(brake: Float, throttle: Float) {
-        if (!isConnected || !authenticated) return
-        val ltByte = (brake.coerceIn(0f, 1f) * 255f).toInt().toByte()
-        val rtByte = (throttle.coerceIn(0f, 1f) * 255f).toInt().toByte()
-
-        synchronized(pedalBuffer) {
-            pedalBuffer.clear()
-            pedalBuffer.put(Protocol.PEDALS)
-            pedalBuffer.put(ltByte)
-            pedalBuffer.put(rtByte)
-            webSocket?.send(pedalBuffer.array().toByteString(0, 3))
-        }
+        val bInt = (brake.coerceIn(0f, 1f) * 255f).roundToInt()
+        val tInt = (throttle.coerceIn(0f, 1f) * 255f).roundToInt()
+        sendPedals(bInt, tInt)
     }
 
-    fun sendButton(button: ButtonId, pressed: Boolean) {
-        if (!isConnected || !authenticated) return
-        synchronized(buttonBuffer) {
-            buttonBuffer.clear()
-            buttonBuffer.put(Protocol.BUTTON)
-            buttonBuffer.put(button.index.toByte())
-            buttonBuffer.put(if (pressed) 1.toByte() else 0.toByte())
-            webSocket?.send(buttonBuffer.array().toByteString(0, 3))
-        }
+    fun sendPedals(brake: Int, throttle: Int) {
+        if (!authenticated) return
+        pedalBuffer.clear()
+        pedalBuffer.put(Protocol.PEDALS)
+        pedalBuffer.put(brake.coerceIn(0, 255).toByte())
+        pedalBuffer.put(throttle.coerceIn(0, 255).toByte())
+        webSocket?.send(pedalBuffer.array().toByteString())
+        trackPacketSent()
+    }
+
+    fun sendButton(buttonId: ButtonId, pressed: Boolean) {
+        if (!authenticated) return
+        buttonBuffer.clear()
+        buttonBuffer.put(Protocol.BUTTON)
+        buttonBuffer.put(buttonId.index.toByte())
+        buttonBuffer.put(if (pressed) 1.toByte() else 0.toByte())
+        webSocket?.send(buttonBuffer.array().toByteString())
+        trackPacketSent()
     }
 
     fun sendStick(isLeft: Boolean, x: Float, y: Float) {
-        if (!isConnected || !authenticated) return
-        val intX = (x.coerceIn(-1f, 1f) * 32767f).toInt().toShort()
-        val intY = (y.coerceIn(-1f, 1f) * 32767f).toInt().toShort()
-
-        val buf = if (isLeft) leftStickBuffer else rightStickBuffer
-        val opcode = if (isLeft) Protocol.LEFT_STICK else Protocol.RIGHT_STICK
-
-        synchronized(buf) {
-            buf.clear()
-            buf.put(opcode)
-            buf.putShort(intX)
-            buf.putShort(intY)
-            webSocket?.send(buf.array().toByteString(0, 5))
+        val xShort = (x.coerceIn(-1f, 1f) * 32767f).roundToInt().toShort()
+        val yShort = (y.coerceIn(-1f, 1f) * 32767f).roundToInt().toShort()
+        if (isLeft) {
+            sendLeftStick(xShort, yShort)
+        } else {
+            sendRightStick(xShort, yShort)
         }
+    }
+
+    fun sendLeftStick(x: Short, y: Short) {
+        if (!authenticated) return
+        leftStickBuffer.clear()
+        leftStickBuffer.put(Protocol.LEFT_STICK)
+        leftStickBuffer.putShort(x)
+        leftStickBuffer.putShort(y)
+        webSocket?.send(leftStickBuffer.array().toByteString())
+        trackPacketSent()
+    }
+
+    fun sendRightStick(x: Short, y: Short) {
+        if (!authenticated) return
+        rightStickBuffer.clear()
+        rightStickBuffer.put(Protocol.RIGHT_STICK)
+        rightStickBuffer.putShort(x)
+        rightStickBuffer.putShort(y)
+        webSocket?.send(rightStickBuffer.array().toByteString())
+        trackPacketSent()
     }
 
     fun sendMouse(dx: Short, dy: Short, buttons: Byte) {
-        if (!isConnected || !authenticated) return
-        synchronized(mouseBuffer) {
-            mouseBuffer.clear()
-            mouseBuffer.put(Protocol.MOUSE)
-            mouseBuffer.putShort(dx)
-            mouseBuffer.putShort(dy)
-            mouseBuffer.put(buttons)
-            webSocket?.send(mouseBuffer.array().toByteString(0, 6))
-        }
+        sendMouseMove(dx, dy, buttons)
     }
 
-    fun sendMediaKey(keyCode: Byte) {
-        if (!isConnected || !authenticated) return
-        synchronized(mediaBuffer) {
-            mediaBuffer.clear()
-            mediaBuffer.put(Protocol.MEDIA)
-            mediaBuffer.put(keyCode)
-            webSocket?.send(mediaBuffer.array().toByteString(0, 2))
-        }
+    fun sendMouse(dx: Int, dy: Int, buttons: Byte) {
+        sendMouseMove(dx.toShort(), dy.toShort(), buttons)
+    }
+
+    fun sendMouseMove(dx: Short, dy: Short, buttons: Byte) {
+        if (!authenticated) return
+        mouseBuffer.clear()
+        mouseBuffer.put(Protocol.MOUSE)
+        mouseBuffer.putShort(dx)
+        mouseBuffer.putShort(dy)
+        mouseBuffer.put(buttons)
+        webSocket?.send(mouseBuffer.array().toByteString())
+        trackPacketSent()
+    }
+
+    fun sendMedia(vkCode: Byte) {
+        sendMediaKey(vkCode)
+    }
+
+    fun sendMediaKey(vkCode: Byte) {
+        if (!authenticated) return
+        mediaBuffer.clear()
+        mediaBuffer.put(Protocol.MEDIA)
+        mediaBuffer.put(vkCode)
+        webSocket?.send(mediaBuffer.array().toByteString())
+        trackPacketSent()
     }
 
     fun sendPing() {
-        if (!isConnected || !authenticated) return
+        if (!authenticated) return
         lastPingSendTimeNs = System.nanoTime()
-        synchronized(pingBuffer) {
-            pingBuffer.clear()
-            pingBuffer.put(Protocol.PING)
-            pingBuffer.putInt((System.currentTimeMillis() and 0xFFFFFFFFL).toInt())
-            webSocket?.send(pingBuffer.array().toByteString(0, 5))
-        }
+        val ts = (System.currentTimeMillis() and 0xFFFFFFFFL).toInt()
+        pingBuffer.clear()
+        pingBuffer.put(Protocol.PING)
+        pingBuffer.putInt(ts)
+        webSocket?.send(pingBuffer.array().toByteString())
     }
 
     fun sendKeepalive() {
-        if (!isConnected || !authenticated) return
-        webSocket?.send(keepaliveBuffer.array().toByteString(0, 1))
+        if (!authenticated) return
+        webSocket?.send(keepaliveBuffer.array().toByteString())
     }
 
     fun toggleDemoMode() {
-        if (!isConnected || !authenticated) return
-        webSocket?.send(demoToggleBuffer.array().toByteString(0, 1))
-    }
-
-    private fun handleIncomingBinary(data: ByteArray) {
-        if (data.isEmpty()) return
-        val opcode = data[0]
-
-        if (opcode == Protocol.PONG) {
-            val elapsedNs = System.nanoTime() - lastPingSendTimeNs
-            val rttMs = (elapsedNs / 1_000_000f).coerceAtLeast(0.1f)
-            onPingMeasured(rttMs)
-        } else if (opcode == Protocol.RUMBLE && data.size >= 3) {
-            val large = (data[1].toInt() and 0xFF) / 255f
-            val small = (data[2].toInt() and 0xFF) / 255f
-            onRumbleReceived?.invoke(large, small)
-        } else if (opcode == Protocol.TELEMETRY && data.size == Protocol.TELEMETRY_PACKET_SIZE) {
-            val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-            buffer.position(1)
-            val currentRpm = buffer.short.toInt() and 0xFFFF
-            val maxRpm = buffer.short.toInt() and 0xFFFF
-            val speedMphX10 = buffer.short.toInt() and 0xFFFF
-            val gear = buffer.get().toInt() and 0xFF
-            val shiftPct = buffer.get().toInt() and 0xFF
-            val slipPct = buffer.get().toInt() and 0xFF
-            val accel = buffer.get().toInt() and 0xFF
-            val brake = buffer.get().toInt() and 0xFF
-            val boost = buffer.get().toInt() and 0xFF
-
-            val speedMph = speedMphX10 / 10.0f
-            val speedKmh = speedMph * 1.60934f
-
-            val telemetry = TelemetryData(
-                currentRpm = currentRpm,
-                maxRpm = if (maxRpm > 0) maxRpm else 8500,
-                speedMph = speedMph,
-                speedKmh = speedKmh,
-                gear = gear,
-                shiftPct = shiftPct,
-                slipPct = slipPct,
-                accel = accel,
-                brake = brake,
-                boostPsi = boost.toFloat(),
-                isDrifting = slipPct > 22,
-                isLive = true
-            )
-            onTelemetryReceived(telemetry)
-        }
+        if (!authenticated) return
+        webSocket?.send(demoToggleBuffer.array().toByteString())
     }
 }

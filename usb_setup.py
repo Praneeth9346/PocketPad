@@ -8,13 +8,15 @@ from pathlib import Path
 
 
 def get_base_dir() -> Path:
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).parent
+
 
 BASE_DIR = get_base_dir()
 ADB_DIR = BASE_DIR / "adb_tools"
 ADB_EXE = ADB_DIR / "platform-tools" / "adb.exe"
+
 
 def get_adb_path():
     """Find adb in PATH, in local adb_tools, or in standard Android SDK dirs."""
@@ -33,6 +35,7 @@ def get_adb_path():
             return str(sdk_adb)
 
     return None
+
 
 def download_adb():
     """Download lightweight official Google Platform Tools if missing."""
@@ -55,6 +58,7 @@ def download_adb():
     except Exception as e:
         print(f"[USB] Could not auto-download ADB: {e}")
         return None
+
 
 def setup_usb_reverse_forwarding():
     """Configure adb reverse port forwarding for 0.2ms USB wire speed."""
@@ -82,6 +86,7 @@ def setup_usb_reverse_forwarding():
         return True, f"Forwarded {len(ports)} ports to USB device: {devices[0]}"
     except Exception as e:
         return False, str(e)
+
 
 if __name__ == "__main__":
     success, msg = setup_usb_reverse_forwarding()

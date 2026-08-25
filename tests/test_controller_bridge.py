@@ -1,17 +1,17 @@
 import struct
+
 import pytest
+
 from controller_bridge import (
-    GamepadBridge,
-    OP_KEEPALIVE,
-    OP_STEER,
-    OP_PEDALS,
     OP_BUTTON,
     OP_LEFT_STICK,
-    OP_RIGHT_STICK,
-    OP_MOUSE,
     OP_MEDIA,
+    OP_MOUSE,
+    OP_PEDALS,
     OP_PING,
-    OP_SNAPSHOT
+    OP_RIGHT_STICK,
+    OP_STEER,
+    GamepadBridge,
 )
 
 
@@ -100,9 +100,9 @@ def test_bridge_rumble_callback():
         b"\x07\x00",
         b"\x08",
         b"\x09\x00",
-        b"\xFF",
-        b"\xFF" * 32,
-    ]
+        b"\xff",
+        b"\xff" * 32,
+    ],
 )
 def test_malformed_packets_do_not_crash(bridge, packet):
     try:
@@ -114,6 +114,7 @@ def test_malformed_packets_do_not_crash(bridge, packet):
 def test_golden_vectors(bridge):
     import json
     from pathlib import Path
+
     vector_file = Path(__file__).parent / "protocol_vectors.json"
     if not vector_file.exists():
         return

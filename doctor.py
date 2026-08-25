@@ -2,7 +2,7 @@
 PocketPad Diagnostics & Environment Doctor
 Verifies Python version, dependencies, ViGEmBus driver, ports, tokens, and ADB status.
 """
-import os
+
 import socket
 import sys
 from pathlib import Path
@@ -32,6 +32,7 @@ def main():
     # 2. websockets
     try:
         import websockets
+
         all_passed &= check("websockets", True, f"v{websockets.__version__}")
     except ImportError as e:
         all_passed &= check("websockets", False, str(e))
@@ -39,6 +40,7 @@ def main():
     # 3. cryptography
     try:
         import cryptography
+
         all_passed &= check("cryptography", True, f"v{cryptography.__version__}")
     except ImportError as e:
         all_passed &= check("cryptography", False, str(e))
@@ -47,13 +49,15 @@ def main():
     try:
         import PIL
         import qrcode
-        all_passed &= check("Pillow & QRCode", True, f"PIL {PIL.__version__}")
+
+        all_passed &= check("Pillow & QRCode", True, f"PIL {PIL.__version__}, QR {qrcode.__version__}")
     except ImportError as e:
         all_passed &= check("Pillow & QRCode", False, str(e))
 
     # 5. vgamepad & ViGEm Driver
     try:
         import vgamepad as vg
+
         try:
             pad = vg.VX360Gamepad()
             pad.reset()
@@ -69,7 +73,7 @@ def main():
     for port in ports:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
-            in_use = (s.connect_ex(('127.0.0.1', port)) == 0)
+            in_use = s.connect_ex(("127.0.0.1", port)) == 0
             status_desc = "In use / Server running" if in_use else "Available"
             check(f"Port {port}", True, status_desc)
 
@@ -86,6 +90,7 @@ def main():
 
     # 9. ADB Tools
     from usb_setup import get_adb_path
+
     adb_path = get_adb_path()
     check("Android Debug Bridge (ADB)", bool(adb_path), adb_path or "Not found in PATH or adb_tools")
 

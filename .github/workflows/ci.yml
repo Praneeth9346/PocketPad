@@ -7,13 +7,42 @@ on:
     branches: [ main ]
 
 jobs:
-  python-checks:
-    name: Python Lint & Tests (${{ matrix.os }} - Py${{ matrix.python-version }})
+  python-lint:
+    name: Python Lint & Code Style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Lint Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 black isort
+
+      - name: Strict Flake8 Linting
+        run: |
+          flake8 . --count --max-line-length=120 --exclude=.gradle,build,dist,app,.system_generated,.git --statistics
+
+      - name: Check Black Code Formatting
+        run: |
+          black --check . --exclude "(\.gradle|build|dist|app)" --line-length 120
+
+      - name: Check isort Import Order
+        run: |
+          isort --check-only . --skip .gradle --skip build --skip dist --skip app
+
+  python-tests:
+    name: Python Tests (${{ matrix.os }} - Py${{ matrix.python-version }})
+    needs: python-lint
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ['3.10', '3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v4
@@ -23,20 +52,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install flake8 black isort
-
-      - name: Lint with Flake8
-        run: |
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          flake8 . --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics
+          pip install pytest pytest-asyncio
 
       - name: Run Pytest Test Suite
         run: |
-          pytest tests/ -v
+          pytest tests/ -v -m "not hardware"
 
   android:
     name: Android Build & Unit Tests

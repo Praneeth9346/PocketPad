@@ -4,19 +4,16 @@ Executes end-to-end verification of TLS certificates, token persistence,
 WebSocket authentication handshake, binary protocol input frames, ping/pong echoes,
 and controller state reset on disconnect.
 """
+
 import asyncio
 import json
-import os
 import struct
-import sys
 import time
-from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import websockets
 
 from controller_bridge import (
-    GamepadBridge,
     OP_BUTTON,
     OP_KEEPALIVE,
     OP_LEFT_STICK,
@@ -27,7 +24,6 @@ from controller_bridge import (
     OP_STEER,
 )
 from server import (
-    EXPECTED_TOKEN,
     PROTOCOL_VERSION,
     GamepadServer,
     _token_matches,
@@ -81,7 +77,8 @@ class SmokeTestRunner:
 
         # Check TLS minimum version
         import ssl
-        min_ver_ok = (ctx1.minimum_version == ssl.TLSVersion.TLSv1_2)
+
+        min_ver_ok = ctx1.minimum_version == ssl.TLSVersion.TLSv1_2
         self.record("TLS 1.2+ minimum version enforced", min_ver_ok)
 
         # Ensure calling get_ssl_context again doesn't recreate/alter key
@@ -195,7 +192,7 @@ class SmokeTestRunner:
                 pong_opcode = pong_resp[0]
                 pong_ts = struct.unpack("<I", pong_resp[1:5])[0]
 
-                ping_ok = (pong_opcode == OP_PONG and pong_ts == probe_ts)
+                ping_ok = pong_opcode == OP_PONG and pong_ts == probe_ts
                 self.record("Ping / Pong Round-Trip Probe & Echo verified", ping_ok, f"Echo TS: {pong_ts}")
 
                 # Sub-test 4.8: Keepalive frame
@@ -205,7 +202,7 @@ class SmokeTestRunner:
 
             # Sub-test 4.9: Disconnect resets controller
             await asyncio.sleep(0.05)
-            reset_ok = (len(server.connected_clients) == 0)
+            reset_ok = len(server.connected_clients) == 0
             self.record("Client disconnect handled & controller state neutralized", reset_ok)
 
         finally:

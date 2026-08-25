@@ -7,9 +7,10 @@ __pycache__/
 # PyInstaller Temporary Build Cache
 build/
 
-# Local Auto-Generated SSL Certificates
+# Local Auto-Generated SSL Certificates & Keys
 cert.pem
 key.pem
+pocketpad_ca_key.pem
 
 # OS & Environment
 .DS_Store

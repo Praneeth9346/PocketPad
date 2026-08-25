@@ -1,10 +1,16 @@
-import datetime
+"""
+PocketPad SSL & Certificate Authority (CA) Helper
+Manages the persistent PocketPad Root CA and issues CA-signed server certificates.
+"""
+
 import ipaddress
 import os
+import shutil
 import socket
 import ssl
 import stat
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cryptography import x509
@@ -14,13 +20,25 @@ from cryptography.x509.oid import NameOID
 
 
 def get_base_dir() -> Path:
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).parent
 
+
 BASE_DIR = get_base_dir()
-CERT_FILE = BASE_DIR / "cert.pem"
-KEY_FILE = BASE_DIR / "key.pem"
+
+CA_KEY_FILE = BASE_DIR / "pocketpad_ca_key.pem"
+CA_CERT_FILE = BASE_DIR / "pocketpad_ca_cert.pem"
+
+SERVER_KEY_FILE = BASE_DIR / "key.pem"
+SERVER_CERT_FILE = BASE_DIR / "cert.pem"
+
+# Compatibility aliases
+CERT_FILE = SERVER_CERT_FILE
+KEY_FILE = SERVER_KEY_FILE
+
+ANDROID_RAW_RES = BASE_DIR / "app" / "src" / "main" / "res" / "raw"
+ANDROID_CA_FILE = ANDROID_RAW_RES / "pocketpad_ca.crt"
 
 
 def secure_file(path: Path):
@@ -31,7 +49,7 @@ def secure_file(path: Path):
         pass
 
 
-def get_all_local_ips():
+def get_all_local_ips() -> list[str]:
     """Discover all local network and USB interface IP addresses."""
     ips = {"127.0.0.1"}
     try:
@@ -44,60 +62,167 @@ def get_all_local_ips():
     return list(ips)
 
 
-def generate_self_signed_cert(local_ip: str = "127.0.0.1"):
-    """Generate self-signed certificate supporting all local and USB network IPs."""
-    all_ips = get_all_local_ips()
-    if local_ip not in all_ips and not local_ip.startswith("169.254"):
-        all_ips.append(local_ip)
+def generate_ca() -> None:
+    """Generate persistent PocketPad Root Certificate Authority (CA)."""
+    if CA_KEY_FILE.exists() and CA_CERT_FILE.exists():
+        # Ensure Android raw resource is in sync
+        _sync_ca_to_android()
+        return
 
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=3072,
+    )
 
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "PocketPad Local Server"),
-        x509.NameAttribute(NameOID.COMMON_NAME, "PocketPad"),
-    ])
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "IN"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "PocketPad"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "PocketPad Local CA"),
+        ]
+    )
 
-    san_list = [x509.DNSName("localhost")]
-    for ip_str in all_ips:
-        try:
-            san_list.append(x509.IPAddress(ipaddress.IPv4Address(ip_str)))
-        except Exception:
-            san_list.append(x509.DNSName(ip_str))
-
+    now = datetime.now(timezone.utc)
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1))
-        .not_valid_after(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=365))
-        .add_extension(x509.SubjectAlternativeName(san_list), critical=False)
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=3650))
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=1),
+            critical=True,
+        )
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                key_encipherment=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                content_commitment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
         .sign(key, hashes.SHA256())
     )
 
-    with open(KEY_FILE, "wb") as f:
-        f.write(key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption()
-        ))
-    secure_file(KEY_FILE)
+    CA_KEY_FILE.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    secure_file(CA_KEY_FILE)
 
-    with open(CERT_FILE, "wb") as f:
-        f.write(cert.public_bytes(serialization.Encoding.PEM))
-    secure_file(CERT_FILE)
+    CA_CERT_FILE.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    secure_file(CA_CERT_FILE)
 
-    return str(CERT_FILE), str(KEY_FILE)
+    _sync_ca_to_android()
 
 
-def get_ssl_context(local_ip: str = "127.0.0.1"):
-    """Get or generate a stable TLS 1.2+ SSL context."""
-    if not CERT_FILE.exists() or not KEY_FILE.exists():
-        generate_self_signed_cert(local_ip)
+def _sync_ca_to_android() -> None:
+    """Copy public CA certificate to Android app raw resources for trust pinning."""
+    try:
+        if ANDROID_RAW_RES.parent.exists():
+            ANDROID_RAW_RES.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(CA_CERT_FILE, ANDROID_CA_FILE)
+    except Exception:
+        pass
+
+
+def generate_server_certificate(local_ips: list[str] | None = None) -> None:
+    """Generate server certificate signed by PocketPad Root CA."""
+    generate_ca()
+
+    if local_ips is None:
+        local_ips = get_all_local_ips()
+
+    ca_key = serialization.load_pem_private_key(
+        CA_KEY_FILE.read_bytes(),
+        password=None,
+    )
+
+    ca_cert = x509.load_pem_x509_certificate(CA_CERT_FILE.read_bytes())
+
+    server_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+
+    san_entries: list[x509.GeneralName] = [
+        x509.DNSName("localhost"),
+        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+    ]
+
+    for ip_str in local_ips:
+        try:
+            san_entries.append(x509.IPAddress(ipaddress.ip_address(ip_str)))
+        except ValueError:
+            san_entries.append(x509.DNSName(ip_str))
+
+    subject = x509.Name(
+        [
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "PocketPad"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "PocketPad Server"),
+        ]
+    )
+
+    now = datetime.now(timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(ca_cert.subject)
+        .public_key(server_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=825))
+        .add_extension(
+            x509.SubjectAlternativeName(san_entries),
+            critical=False,
+        )
+        .add_extension(
+            x509.BasicConstraints(ca=False, path_length=None),
+            critical=True,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=True,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+
+    SERVER_KEY_FILE.write_bytes(
+        server_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    secure_file(SERVER_KEY_FILE)
+
+    SERVER_CERT_FILE.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    secure_file(SERVER_CERT_FILE)
+
+
+def get_ssl_context(local_ip: str = "127.0.0.1") -> ssl.SSLContext:
+    """Get or generate a stable TLS 1.2+ SSL context signed by PocketPad CA."""
+    if not SERVER_CERT_FILE.exists() or not SERVER_KEY_FILE.exists() or not CA_CERT_FILE.exists():
+        generate_server_certificate(get_all_local_ips())
 
     ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ssl_ctx.load_cert_chain(certfile=str(CERT_FILE), keyfile=str(KEY_FILE))
+    ssl_ctx.load_cert_chain(certfile=str(SERVER_CERT_FILE), keyfile=str(SERVER_KEY_FILE))
     return ssl_ctx
+
+
+if __name__ == "__main__":
+    generate_ca()
+    generate_server_certificate()
+    print("[+] PocketPad CA and Server Certificate successfully generated and verified.")

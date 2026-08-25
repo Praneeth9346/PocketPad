@@ -5,6 +5,7 @@ import threading
 
 try:
     import vgamepad as vg
+
     VGAMEPAD_AVAILABLE = True
 except Exception:
     vg = None
@@ -70,14 +71,14 @@ class GamepadBridge:
     binary packets and the Virtual Xbox 360 controller (ViGEmBus).
     """
 
-    STRUCT_STEER = struct.Struct("<h")            # Opcode 0x01: [int16_x]
-    STRUCT_PEDALS = struct.Struct("<BB")          # Opcode 0x02: [uint8_lt, uint8_rt]
-    STRUCT_BUTTON = struct.Struct("<BB")          # Opcode 0x03: [uint8_btn_id, uint8_pressed]
-    STRUCT_STICK_LS = struct.Struct("<hh")        # Opcode 0x05: [int16_lx, int16_ly]
-    STRUCT_STICK_RS = struct.Struct("<hh")        # Opcode 0x06: [int16_rx, int16_ry]
-    STRUCT_SNAPSHOT = struct.Struct("<hhhhBBH")    # Opcode 0x04: [lx, ly, rx, ry, lt, rt, mask]
-    STRUCT_MOUSE = struct.Struct("<hhB")          # Opcode 0x07: [int16_dx, int16_dy, uint8_btns]
-    STRUCT_MEDIA = struct.Struct("<B")            # Opcode 0x08: [uint8_key]
+    STRUCT_STEER = struct.Struct("<h")  # Opcode 0x01: [int16_x]
+    STRUCT_PEDALS = struct.Struct("<BB")  # Opcode 0x02: [uint8_lt, uint8_rt]
+    STRUCT_BUTTON = struct.Struct("<BB")  # Opcode 0x03: [uint8_btn_id, uint8_pressed]
+    STRUCT_STICK_LS = struct.Struct("<hh")  # Opcode 0x05: [int16_lx, int16_ly]
+    STRUCT_STICK_RS = struct.Struct("<hh")  # Opcode 0x06: [int16_rx, int16_ry]
+    STRUCT_SNAPSHOT = struct.Struct("<hhhhBBH")  # Opcode 0x04: [lx, ly, rx, ry, lt, rt, mask]
+    STRUCT_MOUSE = struct.Struct("<hhB")  # Opcode 0x07: [int16_dx, int16_dy, uint8_btns]
+    STRUCT_MEDIA = struct.Struct("<B")  # Opcode 0x08: [uint8_key]
 
     if VGAMEPAD_AVAILABLE:
         BUTTON_MAP = {
@@ -99,21 +100,21 @@ class GamepadBridge:
         }
 
         BUTTON_INDEX_MAP = [
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_A,              # 0
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_B,              # 1
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_X,              # 2
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,              # 3
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,        # 4
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN,      # 5
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT,      # 6
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT,     # 7
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_START,          # 8
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK,           # 9
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_GUIDE,          # 10
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_A,  # 0
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_B,  # 1
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_X,  # 2
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,  # 3
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,  # 4
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN,  # 5
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT,  # 6
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT,  # 7
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_START,  # 8
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK,  # 9
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_GUIDE,  # 10
             vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,  # 11 (LB)
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER, # 12 (RB)
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,     # 13 (LS)
-            vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB,    # 14 (RS)
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,  # 12 (RB)
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,  # 13 (LS)
+            vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB,  # 14 (RS)
         ]
     else:
         BUTTON_MAP = {}
@@ -132,7 +133,7 @@ class GamepadBridge:
         self.lt = 0.0
         self.rt = 0.0
         self.packet_count = 0
-        self.pong_buffer = bytearray(b'\x0A\x00\x00\x00\x00')
+        self.pong_buffer = bytearray(b"\x0a\x00\x00\x00\x00")
         self.rumble_callback = rumble_callback
 
         # Win32 APIs for Mouse/Keyboard emulation
@@ -154,6 +155,7 @@ class GamepadBridge:
                 def _internal_rumble(client, target, large_motor, small_motor, led_number, user_data):
                     if self.rumble_callback:
                         self.rumble_callback(large_motor, small_motor)
+
                 self.gamepad.register_notification(callback_function=_internal_rumble)
 
                 self.reset()
@@ -312,10 +314,14 @@ class GamepadBridge:
             dy = clamp(dy, -MAX_MOUSE_DELTA, MAX_MOUSE_DELTA)
             if self.mouse_event:
                 self.mouse_event(0x0001, dx, dy, 0, 0)
-                if btns & 0x01: self.mouse_event(0x0002, 0, 0, 0, 0)
-                elif btns & 0x10: self.mouse_event(0x0004, 0, 0, 0, 0)
-                if btns & 0x02: self.mouse_event(0x0008, 0, 0, 0, 0)
-                elif btns & 0x20: self.mouse_event(0x0010, 0, 0, 0, 0)
+                if btns & 0x01:
+                    self.mouse_event(0x0002, 0, 0, 0, 0)
+                elif btns & 0x10:
+                    self.mouse_event(0x0004, 0, 0, 0, 0)
+                if btns & 0x02:
+                    self.mouse_event(0x0008, 0, 0, 0, 0)
+                elif btns & 0x20:
+                    self.mouse_event(0x0010, 0, 0, 0, 0)
             return None
 
         # 0x08: Media Key (2 bytes)

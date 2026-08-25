@@ -94,6 +94,7 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
     private var retryDelayMs = 1000L
 
     private val client = GamepadClient(
+        context = application.applicationContext,
         onConnectionStateChanged = { state ->
             viewModelScope.launch(Dispatchers.Main) {
                 handleConnectionState(state)

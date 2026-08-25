@@ -6,7 +6,6 @@ import logging
 import os
 import secrets
 import socket
-import ssl
 import subprocess
 import sys
 import threading
@@ -21,11 +20,7 @@ from controller_bridge import GamepadBridge
 from ssl_helper import get_all_local_ips, get_ssl_context
 from usb_setup import setup_usb_reverse_forwarding
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("PocketPad")
 
 # Configurable Network & Protocol Constants
@@ -47,9 +42,10 @@ ALLOWED_CORS_ORIGINS = {
 
 
 def get_base_dir() -> Path:
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).parent
+
 
 BASE_DIR = get_base_dir()
 TOKEN_FILE = BASE_DIR / ".pocketpad_token"
@@ -122,16 +118,17 @@ def emergency_reset():
 
 
 def get_web_dir() -> Path:
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).parent
         local_web = exe_dir / "web"
         if local_web.exists():
             return local_web
-        if hasattr(sys, '_MEIPASS'):
+        if hasattr(sys, "_MEIPASS"):
             meipass_web = Path(sys._MEIPASS) / "web"
             if meipass_web.exists():
                 return meipass_web
     return Path(__file__).parent / "web"
+
 
 WEB_DIR = get_web_dir()
 
@@ -140,7 +137,7 @@ def get_primary_ip():
     """Detect primary LAN or USB IP address."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(('8.8.8.8', 80))
+        s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
     except Exception:
         ip = "127.0.0.1"
@@ -222,19 +219,21 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
                     "connected_count": len(active_clients),
                     "clients": active_clients,
                     "controller_available": GLOBAL_SERVER.bridge.controller_available if GLOBAL_SERVER else False,
-                    "controller_error": GLOBAL_SERVER.bridge.controller_error if GLOBAL_SERVER else "Server not started",
+                    "controller_error": (
+                        GLOBAL_SERVER.bridge.controller_error if GLOBAL_SERVER else "Server not started"
+                    ),
                     "auth_required": bool(EXPECTED_TOKEN),
-                    "protocol_version": PROTOCOL_VERSION
+                    "protocol_version": PROTOCOL_VERSION,
                 }
             else:
                 data = {
                     "connected_count": len(active_clients),
                     "controller_available": GLOBAL_SERVER.bridge.controller_available if GLOBAL_SERVER else False,
                     "auth_required": True,
-                    "protocol_version": PROTOCOL_VERSION
+                    "protocol_version": PROTOCOL_VERSION,
                 }
 
-            self.wfile.write(json.dumps(data).encode('utf-8'))
+            self.wfile.write(json.dumps(data).encode("utf-8"))
             return
 
         # 2. Joystick Control Panel API (Protected)
@@ -250,7 +249,7 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
             send_security_headers(self)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps(res).encode('utf-8'))
+            self.wfile.write(json.dumps(res).encode("utf-8"))
             return
 
         # 3. Restart ADB Reverse Port Forwarding API (Protected)
@@ -266,7 +265,7 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
             send_security_headers(self)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps(res).encode('utf-8'))
+            self.wfile.write(json.dumps(res).encode("utf-8"))
             return
 
         # 4. Token Rotation API (Protected)
@@ -279,7 +278,7 @@ class CustomHTTPHandler(SimpleHTTPRequestHandler):
             send_security_headers(self)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps(res).encode('utf-8'))
+            self.wfile.write(json.dumps(res).encode("utf-8"))
             return
 
         # 5. Connection QR Code Image (Protected)
@@ -396,18 +395,23 @@ class GamepadServer:
 
     def broadcast_device_status(self):
         """Broadcast connected phone count and details to all desktop listeners."""
-        phone_clients = [info for info in self.client_infos.values()
-                         if info.get("confirmed", False) and not info.get("is_desktop", False)]
+        phone_clients = [
+            info
+            for info in self.client_infos.values()
+            if info.get("confirmed", False) and not info.get("is_desktop", False)
+        ]
         latest_phone = phone_clients[-1] if phone_clients else None
 
-        msg = json.dumps({
-            "type": "device_status",
-            "connected": bool(latest_phone),
-            "client_ip": latest_phone["ip"] if latest_phone else "",
-            "is_usb": latest_phone["is_usb"] if latest_phone else False,
-            "label": latest_phone["label"] if latest_phone else "Disconnected",
-            "phone_count": len(phone_clients)
-        })
+        msg = json.dumps(
+            {
+                "type": "device_status",
+                "connected": bool(latest_phone),
+                "client_ip": latest_phone["ip"] if latest_phone else "",
+                "is_usb": latest_phone["is_usb"] if latest_phone else False,
+                "label": latest_phone["label"] if latest_phone else "Disconnected",
+                "phone_count": len(phone_clients),
+            }
+        )
 
         desktop_clients = [ws for ws, info in self.client_infos.items() if info.get("is_desktop", False)]
         for ws in desktop_clients:
@@ -464,12 +468,16 @@ class GamepadServer:
                 self.auth_failures.pop(client_ip, None)
 
                 # Send hello_ack with protocol version
-                await websocket.send(json.dumps({
-                    "type": "hello_ack",
-                    "version": PROTOCOL_VERSION,
-                    "server": "PocketPad",
-                    "controller_available": self.bridge.controller_available
-                }))
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "hello_ack",
+                            "version": PROTOCOL_VERSION,
+                            "server": "PocketPad",
+                            "controller_available": self.bridge.controller_available,
+                        }
+                    )
+                )
                 logger.info("Client authenticated successfully from %s", client_ip)
 
             except TimeoutError:
@@ -487,13 +495,13 @@ class GamepadServer:
             "is_usb": False,
             "label": "Pending",
             "is_desktop": False,
-            "confirmed": False
+            "confirmed": False,
         }
         self.client_last_activity[websocket] = time.monotonic()
 
         # High-Priority Kernel Socket Options (TCP_NODELAY + IP_TOS 0xB8 Voice QoS + Anti-Bufferbloat)
         try:
-            sock = websocket.transport.get_extra_info('socket')
+            sock = websocket.transport.get_extra_info("socket")
             if sock:
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
@@ -513,7 +521,7 @@ class GamepadServer:
                 info["is_usb"] = is_usb
                 info["label"] = "USB Wired" if is_usb else "Wireless Wi-Fi (WMM QoS)"
                 info["confirmed"] = True
-                logger.info("Phone Gamepad Connected: %s from %s", info['label'], client_ip)
+                logger.info("Phone Gamepad Connected: %s from %s", info["label"], client_ip)
                 self.broadcast_device_status()
 
         try:
@@ -584,7 +592,9 @@ class GamepadServer:
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
-            was_phone = self.client_infos.get(websocket, {}).get("confirmed", False) and not self.client_infos.get(websocket, {}).get("is_desktop", False)
+            was_phone = self.client_infos.get(websocket, {}).get("confirmed", False) and not self.client_infos.get(
+                websocket, {}
+            ).get("is_desktop", False)
             if was_phone:
                 logger.info("Phone %s disconnected. Resetting controller inputs.", client_ip)
             self.connected_clients.discard(websocket)
@@ -605,7 +615,7 @@ class GamepadServer:
                     continue
                 last = self.client_last_activity.get(ws, now)
                 if now - last > CLIENT_HEARTBEAT_TIMEOUT:
-                    logger.warning("Client %s heartbeat timeout. Resetting controller.", info.get('ip', '?'))
+                    logger.warning("Client %s heartbeat timeout. Resetting controller.", info.get("ip", "?"))
                     self.bridge.reset()
                     try:
                         await ws.close(code=4003, reason="Heartbeat timeout")
@@ -648,7 +658,7 @@ async def main():
         ping_timeout=None,
         max_size=MAX_WS_MESSAGE_SIZE,
         max_queue=64,
-        compression=None
+        compression=None,
     )
     wss_server = websockets.serve(
         server_instance.handle_client,
@@ -659,7 +669,7 @@ async def main():
         ping_timeout=None,
         max_size=MAX_WS_MESSAGE_SIZE,
         max_queue=64,
-        compression=None
+        compression=None,
     )
 
     await asyncio.gather(ws_server, wss_server)
