@@ -14,6 +14,7 @@ import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.SecureRandom
+import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
@@ -27,18 +28,43 @@ class GamepadClient(
     private val onRumbleReceived: ((Float, Float) -> Unit)? = null
 ) {
     private val okHttpClient: OkHttpClient = try {
-        val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+        val pocketPadTrustManager = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+                if (chain == null || chain.isEmpty()) {
+                    throw CertificateException("Server certificate chain is empty")
+                }
+                val leafCert = chain[0]
+                leafCert.checkValidity() // Validates expiration and active dates
+
+                val subject = leafCert.subjectX500Principal.name
+                val issuer = leafCert.issuerX500Principal.name
+                val isPocketPadCert = subject.contains("PocketPad", ignoreCase = true) ||
+                                     issuer.contains("PocketPad", ignoreCase = true)
+
+                if (!isPocketPadCert) {
+                    throw CertificateException("Untrusted certificate: Not issued for PocketPad server ($subject)")
+                }
+            }
             override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-        })
-        val sslContext = SSLContext.getInstance("SSL")
-        sslContext.init(null, trustAllCerts, SecureRandom())
+        }
+
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, arrayOf<TrustManager>(pocketPadTrustManager), SecureRandom())
         val sslSocketFactory = sslContext.socketFactory
 
         OkHttpClient.Builder()
-            .sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
-            .hostnameVerifier { _, _ -> true }
+            .sslSocketFactory(sslSocketFactory, pocketPadTrustManager)
+            .hostnameVerifier { hostname, _ ->
+                if (hostname.isNullOrBlank()) return@hostnameVerifier false
+                val isLocalHost = hostname == "localhost" ||
+                                 hostname == "127.0.0.1" ||
+                                 hostname == "10.0.2.2" ||
+                                 hostname.startsWith("192.168.") ||
+                                 hostname.startsWith("10.") ||
+                                 hostname.startsWith("172.")
+                isLocalHost
+            }
             .connectTimeout(3, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .writeTimeout(0, TimeUnit.MILLISECONDS)
