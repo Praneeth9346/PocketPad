@@ -75,6 +75,8 @@ fun PocketPadScreen(
     val padMode by viewModel.padMode.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val pingMs by viewModel.pingMs.collectAsStateWithLifecycle()
+    val measuredSensorHz by viewModel.measuredSensorHz.collectAsStateWithLifecycle()
+    val measuredTxHz by viewModel.measuredTxHz.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
     val visualSteerAngle by viewModel.visualSteerAngle.collectAsStateWithLifecycle()
@@ -106,6 +108,8 @@ fun PocketPadScreen(
                     padMode = padMode,
                     connectionState = connectionState,
                     pingMs = pingMs,
+                    measuredSensorHz = measuredSensorHz,
+                    measuredTxHz = measuredTxHz,
                     onPadModeChange = { mode ->
                         viewModel.setPadMode(mode)
                         when (mode) {

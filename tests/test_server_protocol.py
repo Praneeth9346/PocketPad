@@ -53,18 +53,20 @@ async def test_valid_handshake(server_fixture):
 
 
 @pytest.mark.asyncio
-async def test_invalid_handshake(server_fixture):
-    with pytest.raises(websockets.exceptions.ConnectionClosed):
-        async with websockets.connect(server_fixture.ws_uri) as ws:
-            await ws.send(
-                json.dumps(
-                    {
-                        "type": "hello",
-                        "token": "invalid-token-12345",
-                    }
-                )
+async def test_invalid_token(server_fixture):
+    async with websockets.connect(server_fixture.ws_uri) as websocket:
+
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "hello",
+                    "token": "invalid-token",
+                }
             )
-            await asyncio.wait_for(ws.recv(), timeout=2.0)
+        )
+
+        with pytest.raises(websockets.ConnectionClosed):
+            await websocket.recv()
 
 
 @pytest.mark.asyncio
@@ -79,6 +81,20 @@ async def test_missing_handshake(server_fixture):
                 )
             )
             await asyncio.wait_for(ws.recv(), timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_missing_hello_type(server_fixture):
+    async with websockets.connect(server_fixture.ws_uri) as websocket:
+        await websocket.send(
+            json.dumps(
+                {
+                    "token": server_fixture.token,
+                }
+            )
+        )
+        with pytest.raises(websockets.ConnectionClosed):
+            await websocket.recv()
 
 
 @pytest.mark.asyncio

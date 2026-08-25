@@ -131,7 +131,7 @@ def test_latency_probe_echo(bridge):
     assert unpacked_ts == client_time_ns
 
 
-def test_golden_vectors(bridge):
+def test_protocol_vectors(bridge):
     import json
     from pathlib import Path
 
@@ -139,7 +139,8 @@ def test_golden_vectors(bridge):
     if not vector_file.exists():
         return
 
-    vectors = json.loads(vector_file.read_text())
+    with open(vector_file, "r") as f:
+        vectors = json.load(f)
 
     for name, data in vectors.items():
         raw_bytes = bytes.fromhex(data["hex"])

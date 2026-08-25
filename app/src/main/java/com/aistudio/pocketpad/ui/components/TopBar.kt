@@ -43,6 +43,8 @@ fun TopBar(
     padMode: PadMode,
     connectionState: ConnectionState,
     pingMs: Float?,
+    measuredSensorHz: Float,
+    measuredTxHz: Float,
     onPadModeChange: (PadMode) -> Unit,
     onOpenConnect: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -185,7 +187,7 @@ fun TopBar(
         // 3. RIGHT STATUS PANEL
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             // Connection Pill
             val (connIcon, connLabel) = when (connectionState) {
@@ -224,8 +226,8 @@ fun TopBar(
                 }
             }
 
-            // Live Latency Pill
-            val displayPing = pingMs?.let { String.format("%.1f ms", it) } ?: "-- ms"
+            // Live RTT Pill
+            val displayPing = pingMs?.let { String.format("RTT: %.1f ms", it) } ?: "RTT: --"
             val pingColor = when {
                 pingMs == null -> TextMuted
                 pingMs < 20f -> ForzaGreen
@@ -238,15 +240,34 @@ fun TopBar(
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xFF0F1726))
                     .border(1.dp, Color(0xFF1E2D44), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                    .padding(horizontal = 6.dp, vertical = 5.dp)
                     .testTag("ping_badge")
             ) {
                 Text(
                     text = displayPing,
-                    fontSize = 10.sp,
+                    fontSize = 9.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace,
                     color = pingColor
+                )
+            }
+
+            // Sensor/TX Pill
+            val sensorHzStr = if (measuredSensorHz > 0) "${measuredSensorHz.toInt()}Hz" else "--"
+            val txHzStr = if (measuredTxHz > 0) "${measuredTxHz.toInt()}Hz" else "--"
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF0F1726))
+                    .border(1.dp, Color(0xFF1E2D44), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 6.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = "Sen:$sensorHzStr Tx:$txHzStr",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace,
+                    color = TextMuted
                 )
             }
 

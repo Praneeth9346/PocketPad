@@ -74,6 +74,11 @@ jobs:
       - name: Build Release APK
         run: ./gradlew :app:assembleRelease
 
+      - name: Verify APK Signature
+        run: |
+          BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
+          $BUILD_TOOLS_DIR/apksigner verify --print-certs app/build/outputs/apk/release/*.apk
+
       - name: Generate Checksums
         shell: bash
         run: |

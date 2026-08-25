@@ -57,6 +57,18 @@ PocketPad is engineered for high responsiveness and minimal latency:
 
 ---
 
+## 🔌 How to Connect
+
+1. **USB Wired Mode** (Recommended for lowest latency):
+   Ensure ADB is running and port forwarding is active (the server handles this automatically).
+   In the PocketPad app, connect to: `127.0.0.1:8443`
+
+2. **Wireless Wi-Fi Mode**:
+   Ensure your PC and phone are on the same network (5 GHz recommended).
+   In the PocketPad app, connect to: `<PC-LAN-IP>:8443` (e.g., `192.168.1.50:8443`)
+
+---
+
 ## 🏁 How to Enable Live Telemetry in Forza Horizon
 
 1. Open **Forza Horizon 5 / 4** or **Forza Motorsport**.
