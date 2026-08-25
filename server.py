@@ -85,11 +85,6 @@ def _token_matches(candidate) -> bool:
 # Global server instance reference for REST API
 GLOBAL_SERVER = None
 
-def get_base_dir() -> Path:
-    if getattr(sys, 'frozen', False):
-        return Path(sys.executable).parent
-    return Path(__file__).parent
-
 def get_web_dir() -> Path:
     if getattr(sys, 'frozen', False):
         exe_dir = Path(sys.executable).parent
@@ -248,14 +243,10 @@ def print_banner(primary_ip: str, all_ips: list, usb_status: str, adb_active: bo
         print(f"  👉 Open on phone:  https://localhost:{HTTPS_PORT}  (or http://localhost:{HTTP_PORT})")
     else:
         print(f"  ★ USB Status: {usb_status}")
-    
-    for ip in all_ips:
-        if ip != "127.0.0.1" and (ip.startswith(("10.18.", "192.168.42.", "172.20."))):
-            print(f"  👉 USB Tethering Direct URL:                https://{ip}:{HTTPS_PORT}")
 
     print("\n[ 📶 METHOD A: WIRELESS 5GHz WI-FI MODE (WMM QoS AC_VO) ]")
     for ip in all_ips:
-        if ip != "127.0.0.1" and not (ip.startswith(("10.18.", "192.168.42.", "172.20."))):
+        if ip != "127.0.0.1":
             print(f"  👉 Wi-Fi URL:                               https://{ip}:{HTTPS_PORT}")
 
     print("\n--- Scan QR Code with Phone for Wireless Connection ---")
@@ -282,23 +273,6 @@ class GamepadServer:
         self.loop = None
         self.heartbeat_task = None
         GLOBAL_SERVER = self
-
-    def broadcast_telemetry(self, packet_bytes: bytes):
-        """Push binary telemetry frame to all active mobile clients (non-blocking)."""
-        if not self.connected_clients or not self.loop or not self.loop.is_running():
-            return
-            
-        self.loop.call_soon_threadsafe(self._do_broadcast_telemetry, packet_bytes)
-
-    def _do_broadcast_telemetry(self, packet_bytes: bytes):
-        try:
-            websockets.broadcast(self.connected_clients, packet_bytes)
-        except Exception:
-            for ws in list(self.connected_clients):
-                try:
-                    self.loop.create_task(ws.send(packet_bytes))
-                except Exception:
-                    pass
 
     def broadcast_rumble(self, large_motor: int, small_motor: int):
         """Push binary rumble event to all active mobile clients."""

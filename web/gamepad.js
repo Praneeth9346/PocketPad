@@ -1025,19 +1025,6 @@
     });
   }
 
-  if (btnTelemetryDemo) {
-    btnTelemetryDemo.addEventListener('click', () => {
-      toggleTelemetryDemo();
-    });
-  }
-
-  document.querySelectorAll('input[name="speed-unit"]').forEach(radio => {
-    radio.addEventListener('change', (e) => {
-      speedUnit = e.target.value;
-      if (telemSpeedUnit) telemSpeedUnit.textContent = speedUnit;
-    });
-  });
-
   document.querySelectorAll('input[name="pedal-mode"]').forEach(radio => {
     radio.addEventListener('change', (e) => {
       pedalMode = e.target.value;
