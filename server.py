@@ -548,6 +548,7 @@ class GamepadServer:
         self.auth_failures = {}
         self.loop = None
         self.heartbeat_task = None
+        self.running = True
         GLOBAL_SERVER = self
 
     def broadcast_rumble(self, large_motor: int, small_motor: int):
@@ -607,6 +608,21 @@ class GamepadServer:
                 pass
 
         self.bridge.reset()
+
+    def shutdown_sync(self) -> None:
+        """Safely reset the controller and stop server resources synchronously."""
+        try:
+            self.bridge.reset()
+        except Exception:
+            logger.exception("Controller reset failed during shutdown")
+
+        if self.loop and self.loop.is_running():
+            try:
+                future = asyncio.run_coroutine_threadsafe(self.shutdown(), self.loop)
+                future.result(timeout=2.0)
+            except Exception:
+                pass
+        self.running = False
 
     async def handle_client(self, websocket):
         """Handle incoming WebSocket connections."""

@@ -19,13 +19,17 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+import logging
 import pystray
 import webview
 from PIL import Image, ImageDraw
 
+import server
 from server import EXPECTED_TOKEN, HTTP_PORT, create_desktop_session
 from server import main as run_server
 from usb_setup import setup_usb_reverse_forwarding
+
+logger = logging.getLogger("PocketPadDesktop")
 
 # Keep a reference to the main window
 main_window = None
@@ -116,11 +120,24 @@ def hide_window(icon, item):
         main_window.hide()
 
 
-def exit_app(icon, item):
-    icon.stop()
-    if main_window:
-        main_window.destroy()
-    os._exit(0)
+def exit_app(icon=None, item=None):
+    try:
+        if icon is not None:
+            icon.stop()
+    except Exception:
+        pass
+
+    try:
+        if server.GLOBAL_SERVER is not None:
+            server.GLOBAL_SERVER.shutdown_sync()
+    except Exception:
+        logger.exception("Failed to shutdown server cleanly")
+
+    try:
+        if main_window is not None:
+            main_window.destroy()
+    except Exception:
+        pass
 
 
 def setup_tray():
