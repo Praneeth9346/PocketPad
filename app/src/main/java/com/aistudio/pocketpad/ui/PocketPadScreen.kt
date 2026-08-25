@@ -279,9 +279,10 @@ fun PocketPadScreen(
             ConnectionDialog(
                 initialIp = settings.serverIp,
                 initialPort = settings.serverPort,
+                initialToken = settings.authToken,
                 connectionState = connectionState,
-                onConnect = { ip, port ->
-                    viewModel.connectToServer(ip, port)
+                onConnect = { ip, port, token ->
+                    viewModel.connectToServer(ip, port, token)
                     viewModel.setShowConnectDialog(false)
                 },
                 onDisconnect = { viewModel.disconnectServer() },

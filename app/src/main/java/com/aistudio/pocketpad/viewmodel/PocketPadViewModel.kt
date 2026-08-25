@@ -169,7 +169,8 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
             while (isActive && !isIntentionalDisconnect && _connectionState.value == ConnectionState.DISCONNECTED) {
                 delay(delayMs)
                 if (isActive && !isIntentionalDisconnect) {
-                    client.connect(_settings.value.serverIp, _settings.value.serverPort)
+                    val s = _settings.value
+                    client.connect(s.serverIp, s.serverPort, s.authToken)
                     delayMs = min(delayMs * 2, 8000L) // exponential backoff up to 8s
                 }
             }
@@ -180,11 +181,13 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
         val maxAngle = prefs.getInt("maxSteeringAngle", 45)
         val ip = prefs.getString("serverIp", "") ?: ""
         val port = prefs.getInt("serverPort", 8765)
+        val token = prefs.getString("authToken", "") ?: ""
         _settings.update {
             it.copy(
                 maxSteeringAngle = maxAngle,
                 serverIp = ip,
-                serverPort = port
+                serverPort = port,
+                authToken = token
             )
         }
     }
@@ -194,6 +197,7 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
             .putInt("maxSteeringAngle", s.maxSteeringAngle)
             .putString("serverIp", s.serverIp)
             .putInt("serverPort", s.serverPort)
+            .putString("authToken", s.authToken)
             .apply()
     }
 
@@ -522,13 +526,31 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
         demoSimulationJob = null
     }
 
-    fun connectToServer(ip: String, port: Int) {
-        var cleanIp = ip.trim().lowercase()
+    fun connectToServer(ip: String, port: Int = 8765, token: String = "") {
+        var rawInput = ip.trim()
+        var extractedToken = token.trim()
+
+        // Extract token from query parameter if present (e.g. from QR scan: https://192.168.1.5:8443?token=xyz)
+        if (rawInput.contains("token=")) {
+            val tokenPart = rawInput.substringAfter("token=").substringBefore("&").substringBefore("#")
+            if (tokenPart.isNotEmpty()) {
+                extractedToken = tokenPart
+            }
+            rawInput = rawInput.substringBefore("?")
+        }
+
+        if (extractedToken.isEmpty()) {
+            extractedToken = _settings.value.authToken
+        }
+
+        var cleanIp = rawInput.lowercase()
+        val isHttpsScheme = cleanIp.startsWith("https://") || cleanIp.startsWith("wss://")
         cleanIp = cleanIp.removePrefix("ws://")
                          .removePrefix("wss://")
                          .removePrefix("http://")
                          .removePrefix("https://")
-                         
+                         .trimEnd('/')
+
         var finalIp = cleanIp
         var finalPort = port
         if (cleanIp.contains(":")) {
@@ -541,16 +563,16 @@ class PocketPadViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         isIntentionalDisconnect = false
-        updateSettings { it.copy(serverIp = finalIp, serverPort = finalPort) }
-        
-        val isHttps = finalPort == 8443 || finalPort == 8766
+        updateSettings { it.copy(serverIp = finalIp, serverPort = finalPort, authToken = extractedToken) }
+
+        val isHttps = isHttpsScheme || finalPort == 8443 || finalPort == 8766
         val wsPort = when (finalPort) {
             8000 -> 8765
             8443 -> 8766
             else -> finalPort
         }
-        
-        client.connect(finalIp, wsPort, isHttps)
+
+        client.connect(finalIp, wsPort, extractedToken, isHttps)
 
         pingJob?.cancel()
         pingJob = viewModelScope.launch {

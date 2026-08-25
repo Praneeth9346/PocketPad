@@ -10,6 +10,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
+import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.SecureRandom
@@ -53,6 +54,8 @@ class GamepadClient(
     }
 
     private var webSocket: WebSocket? = null
+    private var authToken: String = ""
+    private var authenticated: Boolean = false
     var isConnected: Boolean = false
         private set
 
@@ -75,8 +78,22 @@ class GamepadClient(
         demoToggleBuffer.put(0x11.toByte())
     }
 
-    fun connect(host: String, port: Int, isHttps: Boolean = false) {
+    fun connect(
+        host: String,
+        port: Int,
+        token: String,
+        isHttps: Boolean = false
+    ) {
         disconnect()
+
+        authToken = token.trim()
+        authenticated = false
+
+        if (authToken.isEmpty()) {
+            onConnectionStateChanged(ConnectionState.DISCONNECTED)
+            return
+        }
+
         onConnectionStateChanged(ConnectionState.CONNECTING)
 
         val protocol = if (isHttps) "wss" else "ws"
@@ -86,38 +103,106 @@ class GamepadClient(
             .url(url)
             .build()
 
-        webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                isConnected = true
-                val isUsb = host == "127.0.0.1" || host == "localhost" || host.startsWith("10.18.")
-                onConnectionStateChanged(
-                    if (isUsb) ConnectionState.CONNECTED_USB else ConnectionState.CONNECTED_WIFI
-                )
-            }
+        webSocket = okHttpClient.newWebSocket(
+            request,
+            object : WebSocketListener() {
 
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                val data = bytes.toByteArray()
-                handleIncomingBinary(data)
-            }
+                override fun onOpen(
+                    webSocket: WebSocket,
+                    response: Response
+                ) {
+                    // TCP/WebSocket is open, send authentication handshake hello
+                    val hello = """
+                        {
+                          "type":"hello",
+                          "token":${JSONObject.quote(authToken)}
+                        }
+                    """.trimIndent()
 
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                // JSON message fallback if needed
-            }
+                    if (!webSocket.send(hello)) {
+                        webSocket.close(1011, "Failed to send authentication")
+                    }
+                }
 
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                isConnected = false
-                onConnectionStateChanged(ConnectionState.DISCONNECTED)
-            }
+                override fun onMessage(
+                    webSocket: WebSocket,
+                    text: String
+                ) {
+                    handleIncomingText(text, host)
+                }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                isConnected = false
-                onConnectionStateChanged(ConnectionState.DISCONNECTED)
+                override fun onMessage(
+                    webSocket: WebSocket,
+                    bytes: ByteString
+                ) {
+                    if (!authenticated) {
+                        webSocket.close(4003, "Binary data before authentication")
+                        return
+                    }
+
+                    handleIncomingBinary(bytes.toByteArray())
+                }
+
+                override fun onClosed(
+                    webSocket: WebSocket,
+                    code: Int,
+                    reason: String
+                ) {
+                    isConnected = false
+                    authenticated = false
+                    onConnectionStateChanged(ConnectionState.DISCONNECTED)
+                }
+
+                override fun onFailure(
+                    webSocket: WebSocket,
+                    t: Throwable,
+                    response: Response?
+                ) {
+                    isConnected = false
+                    authenticated = false
+                    onConnectionStateChanged(ConnectionState.DISCONNECTED)
+                }
             }
-        })
+        )
+    }
+
+    private fun handleIncomingText(text: String, host: String) {
+        try {
+            val json = JSONObject(text)
+
+            when (json.optString("type")) {
+                "hello_ack" -> {
+                    authenticated = true
+                    isConnected = true
+
+                    val isUsb =
+                        host == "127.0.0.1" ||
+                        host == "localhost" ||
+                        host.startsWith("10.18.")
+
+                    onConnectionStateChanged(
+                        if (isUsb) {
+                            ConnectionState.CONNECTED_USB
+                        } else {
+                            ConnectionState.CONNECTED_WIFI
+                        }
+                    )
+                }
+
+                "error" -> {
+                    authenticated = false
+                    isConnected = false
+                    onConnectionStateChanged(ConnectionState.DISCONNECTED)
+                }
+            }
+        } catch (_: Exception) {
+            // Ignore malformed control messages.
+        }
     }
 
     fun disconnect() {
         isConnected = false
+        authenticated = false
         try {
             webSocket?.close(1000, "User disconnected")
         } catch (_: Exception) {}
@@ -126,7 +211,7 @@ class GamepadClient(
     }
 
     fun sendSteer(normX: Float) {
-        if (!isConnected) return
+        if (!isConnected || !authenticated) return
         val clamped = normX.coerceIn(-1.0f, 1.0f)
         val intVal = (clamped * 32767f).toInt().toShort()
 
@@ -139,7 +224,7 @@ class GamepadClient(
     }
 
     fun sendPedals(brake: Float, throttle: Float) {
-        if (!isConnected) return
+        if (!isConnected || !authenticated) return
         val ltByte = (brake.coerceIn(0f, 1f) * 255f).toInt().toByte()
         val rtByte = (throttle.coerceIn(0f, 1f) * 255f).toInt().toByte()
 
@@ -153,7 +238,7 @@ class GamepadClient(
     }
 
     fun sendButton(button: ButtonId, pressed: Boolean) {
-        if (!isConnected) return
+        if (!isConnected || !authenticated) return
         synchronized(buttonBuffer) {
             buttonBuffer.clear()
             buttonBuffer.put(0x03.toByte())
@@ -164,7 +249,7 @@ class GamepadClient(
     }
 
     fun sendStick(isLeft: Boolean, x: Float, y: Float) {
-        if (!isConnected) return
+        if (!isConnected || !authenticated) return
         val intX = (x.coerceIn(-1f, 1f) * 32767f).toInt().toShort()
         val intY = (y.coerceIn(-1f, 1f) * 32767f).toInt().toShort()
 
@@ -181,7 +266,7 @@ class GamepadClient(
     }
 
     fun sendMouse(dx: Short, dy: Short, buttons: Byte) {
-        if (!isConnected) return
+        if (!isConnected || !authenticated) return
         synchronized(mouseBuffer) {
             mouseBuffer.clear()
             mouseBuffer.put(0x07.toByte())
@@ -193,7 +278,7 @@ class GamepadClient(
     }
 
     fun sendMediaKey(keyCode: Byte) {
-        if (!isConnected) return
+        if (!isConnected || !authenticated) return
         synchronized(mediaBuffer) {
             mediaBuffer.clear()
             mediaBuffer.put(0x08.toByte())
@@ -203,7 +288,7 @@ class GamepadClient(
     }
 
     fun sendPing() {
-        if (!isConnected) return
+        if (!isConnected || !authenticated) return
         lastPingSendTime = System.currentTimeMillis()
         synchronized(pingBuffer) {
             pingBuffer.clear()
@@ -214,12 +299,12 @@ class GamepadClient(
     }
 
     fun sendKeepalive() {
-        if (!isConnected) return
+        if (!isConnected || !authenticated) return
         webSocket?.send(keepaliveBuffer.array().toByteString(0, 1))
     }
 
     fun toggleDemoMode() {
-        if (!isConnected) return
+        if (!isConnected || !authenticated) return
         webSocket?.send(demoToggleBuffer.array().toByteString(0, 1))
     }
 

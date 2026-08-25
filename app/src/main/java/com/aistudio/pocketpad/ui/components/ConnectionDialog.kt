@@ -51,14 +51,16 @@ import com.aistudio.pocketpad.ui.theme.TextWhite
 fun ConnectionDialog(
     initialIp: String,
     initialPort: Int,
+    initialToken: String = "",
     connectionState: ConnectionState,
-    onConnect: (String, Int) -> Unit,
+    onConnect: (String, Int, String) -> Unit,
     onDisconnect: () -> Unit,
     onDismiss: () -> Unit,
     onScanQrClick: () -> Unit
 ) {
     var ipText by remember { mutableStateOf(initialIp) }
     var portText by remember { mutableStateOf(initialPort.toString()) }
+    var tokenText by remember { mutableStateOf(initialToken) }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -129,7 +131,7 @@ fun ConnectionDialog(
                             ConnectionState.CONNECTED_USB -> "⚡ Connected via USB Cable (0.2ms Latency)"
                             ConnectionState.CONNECTED_WIFI -> "📶 Connected via 5GHz Wi-Fi (Voice QoS)"
                             ConnectionState.CONNECTING -> "⏳ Connecting to $ipText:$portText..."
-                            ConnectionState.DISCONNECTED -> "● Server Offline. Enter your PC's IP address below:"
+                            ConnectionState.DISCONNECTED -> "● Server Offline. Enter your PC's IP address & Token below:"
                         },
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -193,6 +195,25 @@ fun ConnectionDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // Token Field
+                OutlinedTextField(
+                    value = tokenText,
+                    onValueChange = { tokenText = it },
+                    label = { Text("Security Auth Token (Auto-filled by QR)", fontSize = 10.sp) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("input_server_token"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = ForzaCyan,
+                        unfocusedBorderColor = Color(0xFF2C3E5A),
+                        focusedTextColor = TextWhite,
+                        unfocusedTextColor = TextWhite
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 // Quick presets
                 Text(text = "Quick IP Presets:", fontSize = 9.sp, color = TextMuted)
                 Spacer(modifier = Modifier.height(4.dp))
@@ -228,7 +249,7 @@ fun ConnectionDialog(
                         Button(
                             onClick = {
                                 val port = portText.toIntOrNull() ?: 8765
-                                onConnect(ipText.trim(), port)
+                                onConnect(ipText.trim(), port, tokenText.trim())
                             },
                             modifier = Modifier
                                 .weight(1f)

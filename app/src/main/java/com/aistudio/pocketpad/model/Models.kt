@@ -86,6 +86,7 @@ data class LayoutPreset(
 data class PocketPadSettings(
     val serverIp: String = "", // Force user to configure real IP
     val serverPort: Int = 8765,
+    val authToken: String = "", // Persistent token for authentication handshake
     val maxSteeringAngle: Int = 45, // Degrees for 100% lock (15..90)
     val steeringSensitivity: Float = 2.89f,
     val antiDeadzone: Float = 0.10f, // 10% Forza bypass
